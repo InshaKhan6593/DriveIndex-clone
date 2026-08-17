@@ -1,0 +1,28 @@
+{
+  "name": "driveindex-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Adapter-based scraping pipeline: one Crawlee crawler per auction source, normalized into the common sale schema.",
+  "main": "index.js",
+  "scripts": {
+    "dedup:demo": "node dedup/dedup.demo.js",
+    "scrape:bat": "node crawler/bat-partitioned.crawler.js",
+    "scrape:cab": "node crawler/cab.crawler.js",
+    "scrape:rms": "node crawler/rms.crawler.js",
+    "scrape:mecum": "node crawler/mecum.event.crawler.js",
+    "scrape:gooding": "node crawler/gooding.crawler.js",
+    "scrape:sms": "node crawler/sms.crawler.js",
+    "scrape:broadarrow": "node crawler/broadarrow.crawler.js",
+    "scrape:dupont": "node crawler/dupont.crawler.js",
+    "ingest": "node ingest/ingest.js",
+    "ingest:listings": "node ingest/ingest-listings.js",
+    "compute": "node jobs/nightly-compute.js",
+    "api": "node api/server.js",
+    "validate": "node validation/split-audit.js && node validation/duplication-audit.js && node validation/null-attribute-splits.js"
+  },
+  "dependencies": {
+    "crawlee": "^3.18.1",
+    "express": "^5.2.1",
+    "playwright": "^1.62.1"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "source": "bat",
+  "updatedAt": "2026-08-14T17:50:46.684Z",
+  "sampleSize": 4,
+  "fieldPopulation": {
+    "price": 1,
+    "vin_raw": 1,
+    "mileage": 0.5,
+    "transmission": 1,
+    "sold_at": 1
+  }
+}

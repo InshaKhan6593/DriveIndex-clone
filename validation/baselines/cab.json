@@ -1,0 +1,12 @@
+{
+  "source": "cab",
+  "updatedAt": "2026-08-14T17:50:46.677Z",
+  "sampleSize": 5,
+  "fieldPopulation": {
+    "price": 1,
+    "vin_raw": 1,
+    "mileage": 1,
+    "transmission": 1,
+    "sold_at": 1
+  }
+}

@@ -1,0 +1,274 @@
+{
+ "criteria": {
+  "categories": [
+   {
+    "text": "All",
+    "value": ""
+   },
+   {
+    "text": "All-Terrain Vehicles",
+    "value": 431
+   },
+   {
+    "text": "American",
+    "value": 3
+   },
+   {
+    "text": "Boats",
+    "value": 383
+   },
+   {
+    "text": "Brazilian",
+    "value": 499
+   },
+   {
+    "text": "British",
+    "value": 4
+   },
+   {
+    "text": "Canadian",
+    "value": 498
+   },
+   {
+    "text": "Charity &amp; Non-Profit",
+    "value": 415
+   },
+   {
+    "text": "Convertibles",
+    "value": 434
+   },
+   {
+    "text": "Czech",
+    "value": 542
+   },
+   {
+    "text": "Dutch",
+    "value": 497
+   },
+   {
+    "text": "Electric Vehicles",
+    "value": 426
+   },
+   {
+    "text": "French",
+    "value": 6
+   },
+   {
+    "text": "German",
+    "value": 7
+   },
+   {
+    "text": "Go-Karts",
+    "value": 428
+   },
+   {
+    "text": "Hot Rods",
+    "value": 429
+   },
+   {
+    "text": "Italian",
+    "value": 8
+   },
+   {
+    "text": "Japanese",
+    "value": 9
+   },
+   {
+    "text": "Kei Vehicles",
+    "value": 556
+   },
+   {
+    "text": "Korean",
+    "value": 496
+   },
+   {
+    "text": "Military Vehicles",
+    "value": 447
+   },
+   {
+    "text": "Minibikes &amp; Scooters",
+    "value": 430
+   },
+   {
+    "text": "Motorcycles",
+    "value": 70
+   },
+   {
+    "text": "Parts",
+    "value": 379
+   },
+   {
+    "text": "Prewar",
+    "value": 441
+   },
+   {
+    "text": "Projects",
+    "value": 10
+   },
+   {
+    "text": "Race Cars",
+    "value": 11
+   },
+   {
+    "text": "Right-Hand Drive",
+    "value": 557
+   },
+   {
+    "text": "RVs &amp; Campers",
+    "value": 436
+   },
+   {
+    "text": "Service Vehicles",
+    "value": 479
+   },
+   {
+    "text": "Side-by-Sides",
+    "value": 553
+   },
+   {
+    "text": "Spanish",
+    "value": 82
+   },
+   {
+    "text": "Station Wagons",
+    "value": 433
+   },
+   {
+    "text": "Swedish",
+    "value": 18
+   },
+   {
+    "text": "Tractors",
+    "value": 432
+   },
+   {
+    "text": "Trains",
+    "value": 544
+   },
+   {
+    "text": "Truck &amp; 4x4",
+    "value": 21
+   },
+   {
+    "text": "Vans",
+    "value": 418
+   },
+   {
+    "text": "Wheels",
+    "value": 380
+   }
+  ],
+  "minimumBids": [
+   {
+    "text": "No Min",
+    "value": ""
+   }
+  ],
+  "maximumBids": [
+   {
+    "text": "No Max",
+    "value": ""
+   }
+  ],
+  "ranges": [
+   {
+    "text": "7 Days",
+    "value": "7D",
+    "urlValue": "week"
+   },
+   {
+    "text": "Last Month",
+    "value": "30D",
+    "urlValue": "month"
+   },
+   {
+    "text": "Last Year",
+    "value": "1Y",
+    "urlValue": "year"
+   },
+   {
+    "text": "Last 2 Years",
+    "value": "2Y",
+    "urlValue": "two-years"
+   },
+   {
+    "text": "Last 5 Years",
+    "value": "5Y",
+    "urlValue": "five-years"
+   },
+   {
+    "text": "All Time",
+    "value": "",
+    "urlValue": ""
+   }
+  ],
+  "sorts": [
+   {
+    "text": "Recently Closed",
+    "value": "td",
+    "urlValue": "timestamp"
+   },
+   {
+    "text": "Popular",
+    "value": "vd",
+    "urlValue": "popularity"
+   },
+   {
+    "text": "Highest Bid",
+    "value": "bd",
+    "urlValue": "bids"
+   },
+   {
+    "text": "Oldest",
+    "value": "ta",
+    "urlValue": "rtimestamp"
+   }
+  ],
+  "states": [
+   {
+    "text": "All",
+    "value": ""
+   },
+   {
+    "text": "Sold Only",
+    "value": "sold"
+   },
+   {
+    "text": "Reserve Not Met",
+    "value": "unsold"
+   }
+  ],
+  "types": [
+   {
+    "text": "All",
+    "value": ""
+   },
+   {
+    "text": "Premium",
+    "value": "premium"
+   },
+   {
+    "text": "No Reserve",
+    "value": "no-reserve"
+   }
+  ]
+ },
+ "filter": {
+  "nonce": "dbf5b73fd0",
+  "url": "https://bringatrailer.com/wp-json/bringatrailer/1.0/data/keyword-filter",
+  "labels": {
+   "chart": {
+    "sold": "Sold",
+    "unsold": "Reserve not met"
+   },
+   "filters": {
+    "bid": "High bid",
+    "year": "Vehicle year"
+   }
+  }
+ },
+ "ctx": {
+  "contentGroup": "keyword-page-disambiguation"
+ },
+ "bodyHints": []
+}

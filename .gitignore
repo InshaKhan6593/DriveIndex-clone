@@ -1,0 +1,30 @@
+node_modules/
+
+# Database — local state, not source. Never committed: grows unbounded, exceeds
+# GitHub's 100MB file limit, and there's no reason to version a data file.
+data/
+*.sqlite
+*.sqlite.bak
+*.db
+
+# Scraped corpora, crawl-resume state, and quarantined/superseded dumps. Not source
+# code — these are the pipeline's OUTPUT, reproducible by re-running the crawlers.
+# Also: redistributing raw scraped listing data publicly is a separate concern from
+# scraping it for internal analysis, distinct from any robots.txt/ToS compliance
+# already handled at crawl time — don't publish the corpus itself.
+samples/scraped/
+samples/listings/
+samples/quarantine/
+samples/raw/
+samples/*.state.json
+
+# Crawlee's own runtime cache (request queues, key-value stores) — regenerated on
+# every run, never meant to be versioned.
+storage/
+
+# Local tool config / lock files, not project source.
+.claude/
+
+*.log
+.DS_Store
+Thumbs.db
