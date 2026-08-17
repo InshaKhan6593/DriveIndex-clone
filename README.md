@@ -96,6 +96,60 @@ of settling. Root cause was two independent, real things, not one bug:
 
 ---
 
+## Ranking: why leaderboards don't order by the number they display
+
+`engine/ranking.js`. Ordering Trending by `annual_return` puts artifacts on top — measured, the
+top 8 "appreciating" cars were all **+130%..+198%/yr** fits over 3–6 sales, against a real-world
+ceiling nearer +30% (DriveIndex's own public market-trends page maxes at +30.4%).
+
+The obvious fix — `WHERE confidence >= 0.7 AND sales_count >= 15` — was tried and **rejected**.
+Those numbers were reverse-engineered from one day's data, and they are cliffs: a nightly cron
+walks cars over them in a single step and the cliff never adapts. What's used instead:
+
+```
+score = populationMean + (lowerConfidenceBound − populationMean) × df/(df + K)
+```
+
+- **Lower confidence bound** handles NOISE — a trend through scattered sales has a large standard
+  error, so the conservative end of its interval collapses on its own. Every one of the old
+  top-8 artifacts has a lower bound below −86%.
+- **Shrinkage by degrees of freedom** handles THIN EVIDENCE — three collinear points give a tiny
+  SE and a falsely tight interval. `df = n−2` is the right weight because fitting a line consumes
+  two observations.
+- It is **self-dissolving**: `df/(df+K) → 1` as sales accumulate, so a car rises by earning
+  evidence rather than by clearing a fixed bar. `K` is a documented prior strength, not a
+  threshold, and never needs retuning as the crawlers add data.
+
+Measured: the 1970 Ford Torino GT that ranked top-8 at +165.9%/yr falls to **rank 7,466 of
+9,600**. The board now reads BMW M3 ZCP (n=15), Ferrari 430 Scuderia 16M (n=19), Porsche 911
+Carrera 4S (n=87). Declines come out as Rivian R1S, Hummer EV, Cybertruck and Land Rovers —
+which independently matches DriveIndex's own published declines list.
+
+Stored as `trend_se` / `trend_lcb` / `trend_score` by `nightly-compute` (a two-pass run, because
+the shrinkage target isn't known until every car is fitted). Ranking 9,600 cars per request would
+mean redoing every mileage-adjusted regression on every page load.
+
+**Deal Radar** uses the same philosophy: `judgeAsk()` validates each ask against that car's OWN
+observed sale prices rather than a fixed max-discount rule — self-calibrating as sales arrive. An
+ask below everything the model has ever sold for is a different car (project, salvage, replica),
+not a discount: **198 of 363** candidates are rejected on that basis. Survivors are ordered by
+`discount × confidence`, because a 63% discount against a 22%-confidence value is a worse lead
+than 29% against 64%.
+
+### Calibration against DriveIndex's published output
+
+Their thresholds run server-side and were never in the client bundle, so they can't be read — but
+their public pages are an oracle. Comparing 21 cars they publish on `/market-trends` against ours:
+
+- **median value ratio ours/theirs = 0.97** — the valuation engine already agrees closely.
+- Their **stable share is 72%** vs our 22%, which implies their `STABLE_BAND` is nearer **±15%**
+  than our ±3%.
+
+That second finding is **recorded but deliberately not copied**: calling a car appreciating 14%/yr
+"stable" would gut the point of the product. It is a product decision, not a bug to fix silently.
+
+---
+
 ## Engine defects found by audit and fixed (2026-08-17)
 
 An audit of the valuation logic — not the data — found three defects producing **visibly false
@@ -396,11 +450,27 @@ targeted instruction, not a generic wall — respected without attempting to rou
 different agent identity. Different situation from a 403 (a technical block, arguably either a
 business decision or an oversight); this is an explicit, named "no."
 
-### Not built / blocked
-Barrett-Jackson, Hagerty, Collecting Cars: **403** — a commercial decision, not engineering.
-DuPont Registry: asking prices only. Classic.com: aggregator, `SOURCE_TRUST` 9, staging only per
-the build spec — never authoritative even once built.
-Cars.com: its **robots.txt itself 403s**, so there are no terms to work within.
+### Not built / blocked — three different situations (verified 2026-08-18)
+
+Full detail in `notes/source-registry.md`; the distinction decides what a hand-written scraper
+may do, so it is not collapsed into one bucket:
+
+- **Prohibited for everyone.** **Mecum** — robots.txt prose prohibits data mining "for any
+  commercial purposes" and for developing software/ML/AI. Binds any scraper, not just bots. The
+  7,300 sales already collected are kept; nothing further is added.
+- **Named AI-crawler blocks.** **Collecting Cars**, **PCAR Market** — `User-agent: *` is
+  `Allow: /`, then `ClaudeBot` / `anthropic-ai` / `GPTBot` / `CCBot` are each `Disallow: /`.
+  Nothing here crawls them. Whether that binds a scraper a human writes and runs themselves is a
+  Terms-of-Service question, not a robots.txt one.
+- **Unreadable terms.** **Barrett-Jackson**, **Hagerty**, **Cars.com** — `robots.txt` itself
+  returns 403, so permission cannot be established. Treated as closed.
+
+**Open but unbuilt:** **Bonhams** is the largest opportunity — robots.txt permits it, and the 24
+sales on file come from a proof-of-concept pinned to one auction with `maxLots` defaulting to 5.
+One request per auction returns every lot via `__NEXT_DATA__`. **Classic.com** is fully
+permissive but an aggregator (`SOURCE_TRUST` 9, staging only, never authoritative).
+
+See `notes/WRITING-A-SCRAPER.md` for the record contract and the Bonhams probe findings.
 
 ---
 
@@ -477,7 +547,7 @@ npm --prefix web run dev                  # Next.js frontend on :3001
 
 `web/.env.local` needs `ACCESS_CODE` (the shared login code) and `API_URL`.
 
-**Frontend** — Next.js 16 App Router + shadcn/ui, deliberately monochrome. Three routes:
+**Frontend** — Next.js 16 App Router + shadcn/ui, deliberately monochrome. Six routes:
 
 - `/login` — single shared access code, no accounts table. Checked server-side and exchanged for
   an HMAC-signed httpOnly cookie, so it can't be forged by setting a cookie in devtools.
@@ -487,6 +557,9 @@ npm --prefix web run dev                  # Next.js frontend on :3001
 - `/cars/[id]` — price-history chart with range toggle, Sold + For Sale tables with source
   links, signal, forecast with bear/bull bands, collectibility, liquidity, seasonality, and a
   live mileage re-pricer backed by the engine's real `mileageAdjust()`.
+- `/trending` — market health, top gainers/decliners, segment indexes, bottomed list.
+- `/deals` — Market Deal Radar: live asks under computed value.
+- `/compare` — up to four cars side by side, with a typeahead picker.
 
 **No tier gating is applied in this phase** — `fetchCars()` requests `tier=collector` so every
 computed field is visible. The gating architecture in `api/serialize.js` is intact and unchanged;
@@ -601,4 +674,6 @@ _archive/    one-off probes and superseded crawlers, kept for provenance
 
 Further reading: `notes/SOURCE-ONBOARDING.md` (how to add a source, and what to automate versus
 send to a human), `notes/source-registry.md` (per-source quirks measured on real data),
-`notes/reconciliation-report.md` (line-by-line against the ground truth).
+`notes/reconciliation-report.md` (line-by-line against the ground truth),
+`notes/WRITING-A-SCRAPER.md` (the record contract for a hand-written scraper, plus what is
+left to build and the Bonhams probe findings).

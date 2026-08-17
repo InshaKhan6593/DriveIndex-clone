@@ -7,23 +7,36 @@ Probed live 2026-08-15 with `node crawler/probe-all-sources.js`. Machine-readabl
 
 | Source | Code | Reachable | Listings on index | Prices unauth. | Adapter | Crawler |
 |---|---|---|---|---|---|---|
-| Bring a Trailer | `bat` | yes | **347** | yes | built | built |
-| Mecum | `mecum` | yes | **116** | yes | built | built |
-| Bonhams | `bon` | yes | **85** | no (detail only) | built | built |
-| Cars & Bids | `cab` | yes | **80** | yes | built | built |
-| Classic.com | `classic` | yes | 40 | yes | — | — (aggregator, staging only) |
-| Sotheby's Motorsport | `sms` | yes | 18 | yes | **built (2026-08-16)** | **built — PARTIAL, ~30/729 lots, see below** |
-| RM Sotheby's | `rms` | yes | 17 | no (detail only) | partial | — |
-| Gooding & Company | `good` | yes | 4 | no | **built (2026-08-16)** | **built — 1,975 sales, 41/41 auctions** |
+| Bring a Trailer | `bat` | yes | **347** | yes | built | **built — 162,012 sales; 4 large partitions still unstarted (~130k more)** |
+| Cars & Bids | `cab` | yes | **80** | yes | built | **built — 35,609 sales** |
+| Mecum | `mecum` | **robots.txt prohibits data mining "for any commercial purposes"** | **116** | yes | built | **frozen at 7,300 sales — see below; keeps existing data, adds none** |
+| RM Sotheby's | `rms` | yes | 17 | no (detail only) | built | **built — 2,676 sales + 17 listings** |
+| Gooding & Company | `good` | yes | 4 | no | **built (2026-08-16)** | **built — 2,030 sales, 41/41 auctions (COMPLETE)** |
 | Broad Arrow Auctions | `broadarrow` | yes | 1 | no (detail only) | **built (2026-08-17)** | **built — 252 sales + 172 listings, 8/33 events, see below** |
 | DuPont Registry | `dupont` | yes (needs real browser UA) | 23 (old route, now redirects) | yes (server-rendered) | **built (2026-08-17)** | **built — listings only, 4,786 VDPs, sitemaps 1–6 of 15, see below** |
-| PCAR Market | `pcar` | **robots.txt names ClaudeBot, `Disallow: /`** | — | — | — | **will not build — explicit, targeted block, not a generic wall** |
-| Broad Arrow | `broadarrow` | yes | 1 | no | — | — |
-| Collecting Cars | `collectingcars` | yes | 0 | no | — | — |
-| PCAR Market | `pcar` | yes | 0 | no | — | — |
-| DuPont Registry | `dupont` | yes | 0 | no | — | — |
-| **Barrett-Jackson** | `bj` | **403 BLOCKED** | — | — | — | — |
-| **Hagerty Marketplace** | `hagerty` | **403 BLOCKED** | — | — | — | — |
+| Bonhams | `bon` | **yes — robots.txt permits** | **85** | no (detail only) | built | **PROOF OF CONCEPT ONLY — 24 sales, one auction, `maxLots` default 5. Biggest open opportunity; see below** |
+| Sotheby's Motorsport | `sms` | yes | 18 | yes | **built (2026-08-16)** | **built — CAPPED at 15/request anonymous of 729 lots, see below** |
+| Classic.com | `classic` | **yes — robots.txt fully permissive** | 40 | yes | — | — (aggregator, `SOURCE_TRUST 9`, staging only, never authoritative) |
+| Collecting Cars | `collectingcars` | **robots.txt: `Allow: /` for `*`, but names `ClaudeBot` + `anthropic-ai` → `Disallow: /`** | 0 | no | — | **not built — see the note on named-AI blocks below** |
+| PCAR Market | `pcar` | **robots.txt names ClaudeBot, `Disallow: /`** | — | — | — | **not built — see below** |
+| **Barrett-Jackson** | `bj` | **`robots.txt` itself 403s** | — | — | — | **closed — no terms readable, so no permission establishable** |
+| **Hagerty Marketplace** | `hagerty` | **`robots.txt` itself 403s** | — | — | — | **closed — same as above** |
+| Cars.com | `carscom` | **`robots.txt` itself 403s** | — | — | — | **closed — same as above** |
+
+### On the three different kinds of "blocked" (verified 2026-08-18)
+
+They are not equivalent, and the difference decides what a hand-written scraper may do:
+
+1. **Prohibited for everyone.** Mecum's `robots.txt` carries prose prohibiting data mining "for
+   any commercial purposes" and for developing software/ML/AI. That binds any scraper, not just
+   bots. Existing Mecum data is kept; nothing further is collected.
+2. **Named AI-crawler blocks.** Collecting Cars and PCAR set `User-agent: *` → `Allow: /`
+   (Collecting Cars even sets `Crawl-delay: 1`) and then separately `Disallow: /` for
+   `ClaudeBot`, `anthropic-ai`, `GPTBot`, `CCBot`. Those rules are aimed at AI crawlers. Nothing
+   in this repo crawls them. Whether they bind a scraper a human writes and runs themselves is a
+   **Terms of Service** question, not a robots.txt one — see `WRITING-A-SCRAPER.md`.
+3. **Unreadable terms.** Barrett-Jackson, Hagerty and Cars.com return 403 for `robots.txt`
+   itself. Permission cannot be established, so they are treated as closed.
 
 ## What each status actually means
 
@@ -361,6 +374,40 @@ additive migration (`ALTER TABLE listing ADD COLUMN source_lot_id`) before `sche
 `CREATE UNIQUE INDEX idx_listing_source_lot`, and `ingest/ingest-listings.js` is the new,
 permanent loader for that table — reuses the exact same car-identity resolution as `ingest.js` so
 a listing and a sale for the same real car land on the same `car_id`.
+
+## Bonhams: proof-of-concept only, and what a real crawler needs (probed 2026-08-18)
+
+**The 24 sales in the DB are not a harvest.** `_archive/superseded/bonhams.crawler.js` is
+hardcoded to a single auction (`31959`, Laguna Seca) with `maxLots` defaulting to **5**. It was
+written to prove the adapter worked and never promoted to `crawler/`. The archive behind it is
+untouched — this is the largest open source on the list.
+
+`robots.txt` permits it: only `Bytespider` is blocked, and the sole path rules are
+`Disallow: */aggregate$` and `Disallow: */head_image*`. No `Sitemap:` line.
+
+**The site is Next.js, so the data is embedded — no per-lot fetch needed.**
+`https://cars.bonhams.com/auction/{id}/` (308-redirects to a slugged URL, follow it) carries
+`__NEXT_DATA__` with `props.pageProps.lotData`:
+
+```
+lotData.auctionLots   — EVERY lot for the auction in that one response (57 for auction 31959)
+lotData.nbHits        — total lot count
+lotData.pagesOfLots, currencySymbol, highestPrice, lowestPrice
+```
+
+Per-lot fields confirmed present: `id` (e.g. `"31959-1"` — use verbatim as `source_lot_id`),
+`lotId`, `title`, `slug`, `status` (`"SOLD"`), `price`, `currency`, `auctionEndDate`, `image`,
+`styledDescription`. That is one HTTP request per auction rather than one per lot — the same
+shape Gooding turned out to have, so `crawler/gooding.crawler.js` is the closest reference.
+
+⚠️ **The unsolved piece: enumerating past auctions.** `/auctions/` embeds only `liveAuctions`
+(5 upcoming). No past-results index was found; `/past-auctions/`, `/auction/results/`,
+`/results/`, `/search/` and `/_next/data/{buildId}/…` all 404. Known-good IDs to scan around:
+**31857, 31858, 31959, 32043, 32045, 32060**. A bounded sequential scan works but is wasteful; a
+real index route would be better if one exists.
+
+Bonhams is also **international** — it is where the `price_usd` gap bites hardest (see the FX
+note in `WRITING-A-SCRAPER.md`). Scaling it without fixing FX would silently discard much of it.
 
 ## PCAR Market: explicitly blocked, not just unbuilt (2026-08-17)
 
