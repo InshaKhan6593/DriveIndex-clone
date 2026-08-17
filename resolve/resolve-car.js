@@ -199,7 +199,10 @@ function classifyResolution(resolution = {}) {
   return "UNPROVEN_MODEL";
 }
 
-function queueForReview(db, saleRecord, resolution) {
+// `kind` distinguishes a sale record from a listing record. They share this table but NOT their
+// shape — a listing has no sold_at/price_usd/outlier_note — so anything replaying the queue must
+// know which pipeline a row belongs to. Defaults to 'sale' so every existing caller is unchanged.
+function queueForReview(db, saleRecord, resolution, kind = "sale") {
   const reason = resolution.reason ?? null;
   // WHERE allows 'pending' (routine refresh) AND 'rejected' (a machine verdict can legitimately
   // change — e.g. a false-positive reject rule getting fixed and softened to "review" — so a
@@ -207,8 +210,8 @@ function queueForReview(db, saleRecord, resolution) {
   // HUMAN decided, and no automated reclassification may silently overwrite that.
   db.prepare(
     `INSERT INTO car_resolution_queue
-     (id, source, source_lot_id, raw_title, extracted_year, extracted_make, extracted_model, best_candidate_car_id, best_candidate_score, status, reason, reason_class, created_at, raw_record_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+     (id, source, source_lot_id, raw_title, extracted_year, extracted_make, extracted_model, best_candidate_car_id, best_candidate_score, status, reason, reason_class, created_at, raw_record_json, kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
      ON CONFLICT (source, source_lot_id) DO UPDATE SET
        raw_title            = excluded.raw_title,
        extracted_year       = excluded.extracted_year,
@@ -218,6 +221,7 @@ function queueForReview(db, saleRecord, resolution) {
        reason               = excluded.reason,
        reason_class         = excluded.reason_class,
        raw_record_json      = excluded.raw_record_json,
+       kind                 = excluded.kind,
        status               = 'pending'
      WHERE car_resolution_queue.status IN ('pending', 'rejected')`
   ).run(
@@ -226,7 +230,7 @@ function queueForReview(db, saleRecord, resolution) {
     resolution.candidate ? resolution.candidate.id : null,
     resolution.confidence ?? 0,
     reason, classifyResolution(resolution),
-    new Date().toISOString(), JSON.stringify(saleRecord)
+    new Date().toISOString(), JSON.stringify(saleRecord), kind
   );
 }
 

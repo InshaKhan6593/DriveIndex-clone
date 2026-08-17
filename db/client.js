@@ -19,6 +19,15 @@ function migrate(db) {
   for (const col of ["trend_se", "trend_lcb", "trend_score"]) {
     try { db.exec(`ALTER TABLE car_valuation ADD COLUMN ${col} REAL`); } catch { /* already present */ }
   }
+  // ALTER TABLE cannot add a CHECK constraint, so the added column is plain TEXT; the constraint
+  // still applies to databases created fresh from schema.sql.
+  try {
+    db.exec("ALTER TABLE car_resolution_queue ADD COLUMN kind TEXT NOT NULL DEFAULT 'sale'");
+    // Backfill: a listing record has no sold_at. Existing rows were all written before the
+    // column existed, so classify them from the record itself rather than guessing.
+    db.exec(`UPDATE car_resolution_queue SET kind = 'listing'
+             WHERE json_extract(raw_record_json, '$.sold_at') IS NULL`);
+  } catch { /* already present */ }
 }
 
 function openDb() {

@@ -17,6 +17,7 @@
 
 const { openDb } = require("../db/client");
 const { ingestRecord } = require("../ingest/ingest");
+const { ingestListingRecord } = require("../ingest/ingest-listings");
 const { parseTitle } = require("../resolve/resolve-car-v2");
 const { MAKE_ALIASES } = require("../resolve/vocab");
 const { buildCorpusStats } = require("../resolve/evidence");
@@ -26,12 +27,21 @@ function run() {
   const db = openDb();
 
   const rows = db.prepare(
-    `SELECT id, source, source_lot_id, raw_record_json, status FROM car_resolution_queue WHERE status IN ('pending','rejected')`
+    `SELECT id, source, source_lot_id, raw_record_json, status, kind FROM car_resolution_queue WHERE status IN ('pending','rejected')`
   ).all();
   console.log(`${rows.length} queue rows to replay (pending + rejected)\n`);
 
+  // Carry `kind` alongside the record. The queue holds BOTH sales and listings, and their
+  // shapes are not interchangeable — a listing has no sold_at/price_usd/outlier_note, so feeding
+  // one to the sale path throws "cannot be bound to SQLite parameter 20" and, before this was
+  // routed, killed an entire 47k-row replay on the first listing it reached.
   const records = rows.map((r) => {
-    try { return JSON.parse(r.raw_record_json); } catch { return null; }
+    try {
+      const rec = JSON.parse(r.raw_record_json);
+      if (!rec) return null;
+      // Fall back to shape detection for rows written before the column existed.
+      return { rec, kind: r.kind || (rec.sold_at === undefined ? "listing" : "sale") };
+    } catch { return null; }
   }).filter(Boolean);
 
   // Same pre-pass ingestFiles() does: parse every title once, exclude structural rejects from
@@ -40,7 +50,7 @@ function run() {
   const parsedByTitle = new Map();
   const incoming = [];
   const { structuralVerdict } = require("../resolve/evidence");
-  for (const rec of records) {
+  for (const { rec } of records) {
     if (!rec || !rec.title || parsedByTitle.has(rec.title)) continue;
     const p = parseTitle(rec.title, { url: rec.url });
     parsedByTitle.set(rec.title, p);
@@ -57,7 +67,8 @@ function run() {
   };
 
   if (dryRun) {
-    console.log("--dry-run: parsed", records.length, "records, computed evidence, stopping before ingest.");
+    const nSale = records.filter((r) => r.kind === "sale").length;
+    console.log(`--dry-run: parsed ${records.length} records (${nSale} sale, ${records.length - nSale} listing), computed evidence, stopping before ingest.`);
     db.close();
     return;
   }
@@ -66,7 +77,21 @@ function run() {
     inserted: [], queued: [], duplicatesDropped: [], skippedNoPrice: 0, attachedToExistingCar: 0,
     standingRejects: [], structuralRejects: [], corpusStats, parsedByTitle,
   };
-  for (const rec of records) ingestRecord(db, rec, stats);
+  const listingStats = {
+    inserted: [], queued: [], structuralRejects: [], skippedNoPrice: 0,
+    attachedToExistingCar: 0, corpusStats, parsedByTitle,
+  };
+  // Each row is isolated: a single malformed record must not abort the replay of the other
+  // 47,000. Failures are counted and reported rather than thrown.
+  const failures = [];
+  for (const { rec, kind } of records) {
+    try {
+      if (kind === "listing") ingestListingRecord(db, rec, listingStats);
+      else ingestRecord(db, rec, stats);
+    } catch (err) {
+      failures.push({ source: rec.source, lot: rec.source_lot_id, kind, msg: String(err.message).slice(0, 90) });
+    }
+  }
 
   const after = {
     sale: db.prepare("SELECT COUNT(*) n FROM sale").get().n,
@@ -75,6 +100,12 @@ function run() {
     resolved: db.prepare("SELECT COUNT(*) n FROM car_resolution_queue WHERE status = 'resolved'").get().n,
   };
 
+  if (failures.length) {
+    console.log(`
+!! ${failures.length} rows failed to replay (isolated, run continued):`);
+    for (const f of failures.slice(0, 5)) console.log(`   [${f.kind}] ${f.source}|${f.lot}: ${f.msg}`);
+  }
+  console.log(`listings replayed            : ${listingStats.inserted.length} inserted, ${listingStats.queued.length} still queued`);
   console.log(`newly inserted as real sales : ${stats.inserted.length}  (${stats.inserted.filter(i=>i.created).length} new cars, ${stats.inserted.filter(i=>!i.created).length} attached)`);
   console.log(`still queued for review       : ${stats.queued.length}`);
   console.log(`newly/still rejected          : ${stats.structuralRejects.length + stats.standingRejects.length}`);

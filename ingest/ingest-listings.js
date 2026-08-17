@@ -68,14 +68,14 @@ function ingestListingRecord(db, rec, stats) {
     queueForReview(db, rec, {
       reason: verdict.reason, year: preParse.year ?? null, make: preParse.make ?? null,
       confidence: verdict.confidence, makeInferred: Boolean(preParse.makeInferred), parsedOk: Boolean(preParse.ok),
-    });
+    }, "listing");
     stats.queued.push({ title: rec.title, reason: verdict.reason });
     return;
   }
 
   const resolution = resolveCarV2(db, rec);
   if (resolution.status === "queued") {
-    queueForReview(db, rec, resolution);
+    queueForReview(db, rec, resolution, "listing");
     stats.queued.push({ title: rec.title, reason: resolution.reason });
     return;
   }

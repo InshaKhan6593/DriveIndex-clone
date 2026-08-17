@@ -204,6 +204,11 @@ CREATE TABLE IF NOT EXISTS car_resolution_queue (
   -- could not decide, so every item required re-deriving the problem by hand. A queue whose
   -- items cannot be triaged is a queue nobody works.
   reason                TEXT,
+  -- 'sale' | 'listing'. The queue is shared by both pipelines, and their record shapes are NOT
+  -- interchangeable: a listing has no sold_at / price_usd / outlier_note. Without this marker
+  -- validation/reprocess-queue.js replayed every row through the SALE path, fed a listing to
+  -- insertSale(), and aborted the whole 47k-row run on the first one it hit.
+  kind                  TEXT NOT NULL DEFAULT 'sale' CHECK (kind IN ('sale','listing')),
   -- Coarse bucket for triage, so a reviewer can work one KIND of problem at a time instead of
   -- context-switching between "is this a marque?" and "are these the same car?".
   reason_class          TEXT,
