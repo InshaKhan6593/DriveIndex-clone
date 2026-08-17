@@ -62,17 +62,45 @@ async function fetchSitemapUrls(n) {
   return [...r.text.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
 }
 
+// SITEMAP_COUNT is fixed by the site: vdp-sitemap-1..15.xml.
+const SITEMAP_COUNT = 15;
+
+// Pick the first sitemap that still has unharvested URLs. Without this the crawler always
+// re-checks sitemap 1, which is correct but useless under cron — every scheduled run would
+// re-confirm finished work and never advance. State is per-URL, so a finished sitemap costs
+// one small XML fetch to rule out, not a re-crawl.
+async function firstUnfinishedSitemap(state) {
+  for (let n = 1; n <= SITEMAP_COUNT; n++) {
+    const urls = await fetchSitemapUrls(n);
+    if (!urls.length) continue;
+    if (urls.some((u) => !state.done[u])) return { n, urls };
+    console.log(`  sitemap ${n}: complete, skipping`);
+  }
+  return null;
+}
+
 async function run() {
-  const sitemapIndex = Number(process.argv[2]) || 1;
-  const maxUrls = Number(process.argv[3]) || 200;
+  const auto = process.argv[2] === "auto";
+  const maxUrls = Number(process.argv[auto ? 3 : 3]) || (auto ? 999 : 200);
 
   const listings = new Map(loadJson(OUT, []).map((r) => [`${r.source}|${r.source_lot_id}`, r]));
   const state = loadJson(STATE, { done: {} });
   const startCount = listings.size;
 
   console.log(`resuming: ${listings.size} listings on file\n`);
-  console.log(`fetching vdp-sitemap-${sitemapIndex}.xml ...`);
-  const urls = await fetchSitemapUrls(sitemapIndex);
+
+  let sitemapIndex, urls;
+  if (auto) {
+    console.log("auto mode: finding the first sitemap with unharvested URLs ...");
+    const pick = await firstUnfinishedSitemap(state);
+    if (!pick) { console.log("\nall 15 sitemaps fully harvested — nothing to do"); return; }
+    ({ n: sitemapIndex, urls } = pick);
+    console.log(`  -> sitemap ${sitemapIndex}\n`);
+  } else {
+    sitemapIndex = Number(process.argv[2]) || 1;
+    console.log(`fetching vdp-sitemap-${sitemapIndex}.xml ...`);
+    urls = await fetchSitemapUrls(sitemapIndex);
+  }
   console.log(`  ${urls.length} VDP urls found, harvesting up to ${maxUrls}\n`);
 
   let added = 0, skipped = 0, processed = 0;

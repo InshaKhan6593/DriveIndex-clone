@@ -58,14 +58,43 @@ async function fetchText(url) {
   return { http: 0, text: null };
 }
 
-async function fetchSitemapUrls(eventPrefix) {
+// One fetch returns every vehicle URL on the site; callers filter it. Kept separate from
+// fetchSitemapUrls() so `auto` mode can group by event without re-downloading.
+async function fetchAllSitemapEntries() {
   const res = await fetch(SITEMAP, { headers: HEADERS, redirect: "follow", signal: AbortSignal.timeout(30000) });
   const buf = Buffer.from(await res.arrayBuffer());
   const xml = zlib.gunzipSync(buf).toString("utf8");
-  const urls = [...xml.matchAll(/<loc>(https:\/\/www\.broadarrowauctions\.com\/vehicles\/([a-z0-9]+)_[a-z0-9]+\/[^<]*)<\/loc>/gi)]
-    .filter((m) => m[2].toLowerCase() === eventPrefix.toLowerCase())
-    .map((m) => m[1]);
-  return [...new Set(urls)];
+  const seen = new Set();
+  const out = [];
+  for (const m of xml.matchAll(/<loc>(https:\/\/www\.broadarrowauctions\.com\/vehicles\/([a-z0-9]+)_[a-z0-9]+\/[^<]*)<\/loc>/gi)) {
+    if (seen.has(m[1])) continue;
+    seen.add(m[1]);
+    out.push({ url: m[1], event: m[2].toLowerCase() });
+  }
+  return out;
+}
+
+async function fetchSitemapUrls(eventPrefix) {
+  const all = await fetchAllSitemapEntries();
+  return all.filter((e) => e.event === eventPrefix.toLowerCase()).map((e) => e.url);
+}
+
+// Pick the event with the most unharvested lots. Without this the crawler always re-checks the
+// hardcoded default event, which under cron means never advancing past it. Largest-first so a
+// scheduled run does the most useful work available in its time budget; per-lot state means a
+// finished event is skipped for free.
+async function largestUnfinishedEvent(state) {
+  const all = await fetchAllSitemapEntries();
+  const byEvent = new Map();
+  for (const e of all) {
+    const lotId = (e.url.match(LOT_ID_RE) || [])[1];
+    if (!lotId || state.done[lotId]) continue;
+    if (!byEvent.has(e.event)) byEvent.set(e.event, []);
+    byEvent.get(e.event).push(e.url);
+  }
+  if (!byEvent.size) return null;
+  const [event, urls] = [...byEvent.entries()].sort((a, b) => b[1].length - a[1].length)[0];
+  return { event, urls, remaining: byEvent.size };
 }
 
 // event/branch name (exact text) -> closing ISO date
@@ -107,10 +136,19 @@ async function run() {
   const eventDates = await resolveEventDates();
   console.log(`  ${eventDates.size} events with a resolved date\n`);
 
-  console.log(`fetching sitemap, filtering to event prefix "${eventPrefix}" ...`);
-  const urls = await fetchSitemapUrls(eventPrefix);
-  console.log(`  ${urls.length} vehicle pages for this event\n`);
-  if (!urls.length) { console.log("nothing to do — check the event prefix"); return; }
+  let urls;
+  if (eventPrefix === "auto") {
+    console.log("auto mode: finding the event with the most unharvested lots ...");
+    const pick = await largestUnfinishedEvent(state);
+    if (!pick) { console.log("every event in the sitemap is fully harvested — nothing to do"); return; }
+    urls = pick.urls;
+    console.log(`  -> "${pick.event}" (${urls.length} lots outstanding; ${pick.remaining} events still have work)\n`);
+  } else {
+    console.log(`fetching sitemap, filtering to event prefix "${eventPrefix}" ...`);
+    urls = await fetchSitemapUrls(eventPrefix);
+    console.log(`  ${urls.length} vehicle pages for this event\n`);
+    if (!urls.length) { console.log("nothing to do — check the event prefix"); return; }
+  }
 
   let added = 0, addedListings = 0, skipped = 0, undated = 0;
   for (const url of urls) {
