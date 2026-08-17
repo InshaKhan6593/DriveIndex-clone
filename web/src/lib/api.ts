@@ -98,6 +98,67 @@ export async function fetchCarDetail(id: string): Promise<CarDetail | null> {
   return res.json();
 }
 
+export type TrendingCar = {
+  id: string; year: number; make: string; model: string; body_type: string | null;
+  current_value: number | null; annual_return: number | null; trend_score: number | null;
+  sales_count: number; confidence: number | null; signal: string | null;
+  listings_count?: number; image_url: string | null;
+};
+
+export type TrendingResponse = {
+  health: Record<string, number>;
+  gainers: TrendingCar[];
+  decliners: TrendingCar[];
+  segments: { segment: string; count: number; avgReturn: number; avgValue: number }[];
+  bottomed: TrendingCar[];
+};
+
+export async function fetchTrending(): Promise<TrendingResponse> {
+  const res = await fetch(`${API_URL}/api/trending`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+}
+
+export type Deal = {
+  listing_id: string; price: number; mileage: number | null; source: string; url: string | null;
+  first_seen_at: string | null; car_id: string; year: number; make: string; model: string;
+  current_value: number; annual_return: number | null; signal: string | null;
+  confidence: number | null; sales_count: number; image_url: string | null; discount: number;
+};
+
+export async function fetchDeals(): Promise<{ total: number; rejectedAsUnverifiable: number; deals: Deal[] }> {
+  const res = await fetch(`${API_URL}/api/deals`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+}
+
+export type CompareCar = {
+  id: string; year: number; make: string; model: string; body_type: string | null;
+  generation: string | null; current_value: number | null; median_price: number | null;
+  signal: string | null; confidence: number | null; annual_return: number | null;
+  forecast_1y: number | null; forecast_3y: number | null; forecast_5y: number | null;
+  collectibility_score: number | null; collectibility_reasons: string[];
+  liquidity_verdict: string | null; months_of_supply: number | null;
+  sales_count: number; avg_mileage: number | null;
+  buy_hold_sell: string | null; buy_hold_sell_copy: string | null;
+  best_months: number[]; worst_months: number[]; segment: string | null;
+  listings_count: number; image_url: string | null;
+  sales: { sold_at: string; price: number; mileage: number | null }[];
+};
+
+export async function fetchCompare(ids: string[]): Promise<{ cars: CompareCar[] }> {
+  if (!ids.length) return { cars: [] };
+  const res = await fetch(`${API_URL}/api/compare?ids=${ids.join(",")}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+}
+
+export async function searchCars(q: string): Promise<{ results: { id: string; year: number; make: string; model: string; current_value: number | null; sales_count: number }[] }> {
+  const res = await fetch(`${API_URL}/api/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+  if (!res.ok) return { results: [] };
+  return res.json();
+}
+
 export async function fetchReprice(id: string, miles: number): Promise<number | null> {
   const res = await fetch(`${API_URL}/api/cars/${id}/reprice?miles=${miles}`, { cache: "no-store" });
   if (!res.ok) return null;

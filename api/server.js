@@ -17,6 +17,7 @@ const cors = require("cors");
 const { openDb } = require("../db/client");
 const { serializeCarSummary, serializeCarDetail, TIERS } = require("./serialize");
 const { mileageAdjust } = require("../engine/mileage");
+const { judgeAsk, dealScore, plausibleMileage } = require("../engine/ranking");
 
 const app = express();
 app.use(cors());
@@ -176,6 +177,151 @@ app.get("/api/cars/:id/reprice", (req, res) => {
 app.get("/api/admin/resolution-queue", (req, res) => {
   const rows = db.prepare("SELECT id, source, raw_title, extracted_year, extracted_make, status, created_at FROM car_resolution_queue WHERE status = 'pending' ORDER BY created_at DESC").all();
   res.json({ pending: rows.length, items: rows });
+});
+
+// TRENDING — market health plus the leaderboards.
+//
+// Ordered by `trend_score`, never by `annual_return`. Ranking on the raw return puts artifacts
+// on top: measured before this existed, the top 8 were all +130%..+198%/yr fits over 3-6 sales,
+// against a real-world ceiling nearer +30%. trend_score is the conservative bound shrunk by
+// degrees of freedom (engine/ranking.js) — cars rise as evidence accumulates rather than by
+// clearing a hardcoded sales cutoff. annual_return is still what gets DISPLAYED, because that
+// is the number a user understands; it just isn't what decides the order.
+app.get("/api/trending", (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 12, 50);
+
+  const health = db.prepare(
+    `SELECT signal, COUNT(*) n FROM car_valuation WHERE signal IS NOT NULL GROUP BY signal`
+  ).all().reduce((acc, r) => ({ ...acc, [r.signal]: r.n }), {});
+
+  const board = (dir) => db.prepare(
+    `SELECT c.id, c.year, c.make, c.model, c.body_type,
+            v.current_value, v.annual_return, v.trend_score, v.sales_count, v.confidence, v.signal,
+            (SELECT COUNT(*) FROM listing l WHERE l.car_id = c.id AND l.is_active = 1) AS listings_count,
+            (SELECT s.image_url FROM sale s WHERE s.car_id = c.id AND s.image_url IS NOT NULL
+               ORDER BY s.sold_at DESC LIMIT 1) AS image_url
+     FROM car_valuation v JOIN car c ON c.id = v.car_id
+     WHERE v.trend_score IS NOT NULL AND v.annual_return IS NOT NULL AND v.current_value >= 5000
+     ORDER BY v.trend_score ${dir === "up" ? "DESC" : "ASC"}
+     LIMIT ?`
+  ).all(limit);
+
+  const segments = db.prepare(
+    `SELECT segment, COUNT(*) n, AVG(annual_return) avgReturn, AVG(current_value) avgValue
+     FROM car_valuation WHERE segment IS NOT NULL AND annual_return IS NOT NULL
+     GROUP BY segment ORDER BY n DESC`
+  ).all();
+
+  const bottomed = db.prepare(
+    `SELECT c.id, c.year, c.make, c.model, v.current_value, v.annual_return, v.sales_count,
+            (SELECT s.image_url FROM sale s WHERE s.car_id = c.id AND s.image_url IS NOT NULL
+               ORDER BY s.sold_at DESC LIMIT 1) AS image_url
+     FROM car_valuation v JOIN car c ON c.id = v.car_id
+     WHERE v.signal = 'bottomed' AND v.current_value >= 5000
+     ORDER BY v.trend_score DESC LIMIT ?`
+  ).all(limit);
+
+  res.json({
+    health,
+    gainers: board("up"),
+    decliners: board("down"),
+    segments: segments.map((s) => ({ segment: s.segment, count: s.n, avgReturn: s.avgReturn, avgValue: Math.round(s.avgValue) })),
+    bottomed,
+  });
+});
+
+// MARKET DEAL RADAR — live asks priced under our computed value.
+//
+// Every candidate is checked by judgeAsk() against the car's OWN observed sale prices, not a
+// fixed maximum-discount rule. Without that check the naive query returned 364 "deals" whose
+// top entries were all project cars — e.g. a 1959 Jaguar XK 150 asking $21,500 against a
+// $112,000 value derived from a single sale, listing 0 miles. An ask below everything the model
+// has ever actually sold for is a different car, not a bargain.
+app.get("/api/deals", (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 40, 100);
+
+  const candidates = db.prepare(
+    `SELECT l.id AS listing_id, l.price, l.mileage, l.source, l.url, l.first_seen_at,
+            c.id AS car_id, c.year, c.make, c.model,
+            v.current_value, v.annual_return, v.signal, v.confidence, v.sales_count,
+            (SELECT s.image_url FROM sale s WHERE s.car_id = c.id AND s.image_url IS NOT NULL
+               ORDER BY s.sold_at DESC LIMIT 1) AS image_url
+     FROM listing l
+     JOIN car c ON c.id = l.car_id
+     JOIN car_valuation v ON v.car_id = c.id
+     WHERE l.is_active = 1 AND l.price > 0 AND v.current_value > 0 AND l.price < v.current_value`
+  ).all();
+
+  const salePricesFor = db.prepare("SELECT price FROM sale WHERE car_id = ? AND status = 'sold'");
+  const deals = [];
+  let rejected = 0;
+  for (const cand of candidates) {
+    const salePrices = salePricesFor.all(cand.car_id).map((r) => r.price);
+    const verdict = judgeAsk({ price: cand.price }, { currentValue: cand.current_value, salePrices });
+    if (!verdict.isDeal) { rejected++; continue; }
+    deals.push({
+      ...cand,
+      mileage: plausibleMileage(cand.mileage, cand.year),
+      discount: verdict.discount,
+      score: dealScore(verdict.discount, cand.confidence),
+    });
+  }
+  // Sorted by believability, not by raw discount — see dealScore() for why.
+  deals.sort((a, b) => b.score - a.score);
+
+  res.json({
+    total: deals.length,
+    rejectedAsUnverifiable: rejected,
+    deals: deals.slice(0, limit),
+  });
+});
+
+// COMPARE — up to 4 cars side by side. Pure projection over existing valuations.
+app.get("/api/compare", (req, res) => {
+  const ids = String(req.query.ids || "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 4);
+  if (!ids.length) return res.json({ cars: [] });
+
+  const cars = ids.map((id) => {
+    const row = db.prepare(
+      `SELECT c.id, c.year, c.make, c.model, c.body_type, c.generation,
+              v.current_value, v.median_price, v.signal, v.confidence, v.annual_return,
+              v.forecast_1y, v.forecast_3y, v.forecast_5y, v.collectibility_score,
+              v.collectibility_reasons, v.liquidity_verdict, v.months_of_supply,
+              v.sales_count, v.avg_mileage, v.buy_hold_sell, v.buy_hold_sell_copy,
+              v.best_months, v.worst_months, v.segment,
+              (SELECT COUNT(*) FROM listing l WHERE l.car_id = c.id AND l.is_active = 1) AS listings_count,
+              (SELECT s.image_url FROM sale s WHERE s.car_id = c.id AND s.image_url IS NOT NULL
+                 ORDER BY s.sold_at DESC LIMIT 1) AS image_url
+       FROM car c LEFT JOIN car_valuation v ON v.car_id = c.id WHERE c.id = ?`
+    ).get(id);
+    if (!row) return null;
+    const sales = db.prepare(
+      "SELECT sold_at, price, mileage FROM sale WHERE car_id = ? AND status = 'sold' ORDER BY sold_at"
+    ).all(id);
+    return {
+      ...row,
+      collectibility_reasons: JSON.parse(row.collectibility_reasons ?? "[]"),
+      best_months: JSON.parse(row.best_months ?? "[]"),
+      worst_months: JSON.parse(row.worst_months ?? "[]"),
+      sales,
+    };
+  }).filter(Boolean);
+
+  res.json({ cars });
+});
+
+// Typeahead for the compare picker.
+app.get("/api/search", (req, res) => {
+  const q = String(req.query.q || "").trim();
+  if (q.length < 2) return res.json({ results: [] });
+  const rows = db.prepare(
+    `SELECT c.id, c.year, c.make, c.model, v.current_value, v.sales_count
+     FROM car c JOIN car_valuation v ON v.car_id = c.id
+     WHERE (lower(c.make) || ' ' || lower(c.model)) LIKE lower(?)
+       AND v.current_value IS NOT NULL
+     ORDER BY v.sales_count DESC LIMIT 12`
+  ).all(`%${q}%`);
+  res.json({ results: rows });
 });
 
 app.get("/api/stats/public", (req, res) => {

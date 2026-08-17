@@ -61,6 +61,16 @@ CREATE TABLE IF NOT EXISTS car_valuation (
   recent_return                   REAL,
   volatility                       REAL,
 
+  -- Ranking inputs, computed once per night rather than per request (see engine/ranking.js).
+  -- trend_se     : standard error of the fitted slope — how noisy the trend actually is.
+  -- trend_lcb    : conservative end of the annualised-return interval.
+  -- trend_score  : trend_lcb shrunk toward the market mean by degrees of freedom. THIS is what
+  --                leaderboards order by; annual_return is the headline number to DISPLAY.
+  --                Ranking on annual_return directly puts 3-sale artifacts on top.
+  trend_se REAL,
+  trend_lcb REAL,
+  trend_score REAL,
+
   forecast_1y INTEGER, forecast_3y INTEGER, forecast_5y INTEGER,
   bear_3y INTEGER, bull_3y INTEGER, bear_5y INTEGER, bull_5y INTEGER,
   projection_confidence REAL,

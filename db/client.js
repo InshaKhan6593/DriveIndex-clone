@@ -16,6 +16,9 @@ const DB_PATH = path.join(__dirname, "..", "data", "driveindex.sqlite");
 // the column now present (every run after this one). Each entry must be safe to run every time.
 function migrate(db) {
   try { db.exec("ALTER TABLE listing ADD COLUMN source_lot_id TEXT"); } catch { /* table doesn't exist yet, or column already added */ }
+  for (const col of ["trend_se", "trend_lcb", "trend_score"]) {
+    try { db.exec(`ALTER TABLE car_valuation ADD COLUMN ${col} REAL`); } catch { /* already present */ }
+  }
 }
 
 function openDb() {

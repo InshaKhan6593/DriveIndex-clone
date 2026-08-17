@@ -12,6 +12,8 @@ const { computeLiquidity } = require("./liquidity");
 const { buyHoldSell } = require("./buy-hold-sell");
 const { classifySegment } = require("./segment");
 const { baselineDepreciationForValue } = require("./depreciation");
+const { mileageAdjust } = require("./mileage");
+const { fitWithStandardError, lowerConfidenceReturn, upperConfidenceReturn } = require("./ranking");
 const { mean } = require("./stats");
 
 function ageOf(year) {
@@ -68,6 +70,20 @@ function computeValuation(car, allSales, activeListingsCount = 0, opts = {}) {
   const signalResult = classifySignal(cleanSales, { avgMiles: avgMileage, collectibility: collect.score, age });
   const conf = confidence(signalResult.n, signalResult.rSquared, signalResult.volatility);
 
+  // Ranking inputs. Computed here (once per nightly run) rather than in the API, because it
+  // needs every sale's mileage-adjusted log price — far too expensive to redo per request
+  // across ~56k cars. Only stored when the signal itself is trustworthy: if classifySignal()
+  // refused to make a call, there is no trend worth ranking. Note this deliberately re-fits
+  // rather than reusing signal.js's regression — signal.js reports R² but not the slope's
+  // standard error, which is the whole basis of a conservative bound.
+  const trendPoints = cleanSales.map((s) => ({
+    x: (Date.now() - new Date(s.sold_at).getTime()) / (365.25 * 86400000),
+    y: Math.log(Math.max(mileageAdjust(s.price_usd ?? s.price, s.mileage ?? avgMileage, avgMileage, collect.score, age), 1)),
+  }));
+  const trendFit = signalResult.annualReturn != null ? fitWithStandardError(trendPoints) : null;
+  const trendLcb = lowerConfidenceReturn(trendFit);
+  const trendUcb = upperConfidenceReturn(trendFit);
+
   const forecast = valueResult.currentValue
     ? computeForecast({
         currentValue: valueResult.currentValue,
@@ -100,6 +116,13 @@ function computeValuation(car, allSales, activeListingsCount = 0, opts = {}) {
     confidenceLevel: conf.level,
     annualReturn: signalResult.annualReturn,
     recentReturn: signalResult.recentReturn,
+
+    // Ranking inputs — see engine/ranking.js. trendScore is filled in by the caller, which is
+    // the only place that knows the population mean to shrink toward.
+    trendSe: trendFit ? trendFit.se : null,
+    trendDf: trendFit ? trendFit.df : null,
+    trendLcb,
+    trendUcb,
     volatility: signalResult.volatility,
 
     // PROJECTION CONFIDENCE — a top-level key in their API (§2) that we were never emitting,

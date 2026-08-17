@@ -6,6 +6,7 @@
 
 const { openDb, newId } = require("../db/client");
 const { computeValuation } = require("../engine/index");
+const { shrinkToward } = require("../engine/ranking");
 
 function upsertValuation(db, result) {
   db.prepare(
@@ -19,7 +20,8 @@ function upsertValuation(db, result) {
        buy_discount_pct, sell_premium_pct, collectibility_score, collectibility_reasons,
        liquidity_tier, sales_per_year, days_between_sales, sales_count, outlier_count,
        recent_sales_count, listings_count, data_basis, value_basis,
-       segment, buy_hold_sell, buy_hold_sell_copy, liquidity_verdict, liquidity_copy, months_of_supply)
+       segment, buy_hold_sell, buy_hold_sell_copy, liquidity_verdict, liquidity_copy, months_of_supply,
+       trend_se, trend_lcb, trend_score)
      VALUES (@car_id,@computed_at,@current_value,@median_price,@price_low,@price_high,@avg_mileage,
        @retained_value,@signal,@confidence,@annual_return,@recent_return,@volatility,
        @forecast_1y,@forecast_3y,@forecast_5y,@bear_3y,@bull_3y,@bear_5y,@bull_5y,
@@ -29,7 +31,8 @@ function upsertValuation(db, result) {
        @buy_discount_pct,@sell_premium_pct,@collectibility_score,@collectibility_reasons,
        @liquidity_tier,@sales_per_year,@days_between_sales,@sales_count,@outlier_count,
        @recent_sales_count,@listings_count,@data_basis,@value_basis,
-       @segment,@buy_hold_sell,@buy_hold_sell_copy,@liquidity_verdict,@liquidity_copy,@months_of_supply)
+       @segment,@buy_hold_sell,@buy_hold_sell_copy,@liquidity_verdict,@liquidity_copy,@months_of_supply,
+       @trend_se,@trend_lcb,@trend_score)
      ON CONFLICT(car_id) DO UPDATE SET
        computed_at=excluded.computed_at, current_value=excluded.current_value,
        median_price=excluded.median_price, price_low=excluded.price_low, price_high=excluded.price_high,
@@ -52,7 +55,8 @@ function upsertValuation(db, result) {
        data_basis=excluded.data_basis, value_basis=excluded.value_basis,
        segment=excluded.segment, buy_hold_sell=excluded.buy_hold_sell,
        buy_hold_sell_copy=excluded.buy_hold_sell_copy, liquidity_verdict=excluded.liquidity_verdict,
-       liquidity_copy=excluded.liquidity_copy, months_of_supply=excluded.months_of_supply`
+       liquidity_copy=excluded.liquidity_copy, months_of_supply=excluded.months_of_supply,
+       trend_se=excluded.trend_se, trend_lcb=excluded.trend_lcb, trend_score=excluded.trend_score`
   ).run({
     car_id: result.carId,
     computed_at: result.computedAt,
@@ -107,6 +111,9 @@ function upsertValuation(db, result) {
     liquidity_verdict: result.liquidityVerdict ?? null,
     liquidity_copy: result.liquidityCopy ?? null,
     months_of_supply: result.monthsOfSupply ?? null,
+    trend_se: result.trendSe ?? null,
+    trend_lcb: result.trendLcb ?? null,
+    trend_score: result.trendScore ?? null,
   });
 }
 
@@ -127,14 +134,28 @@ function runNightlyCompute(db) {
       .all().map((r) => [r.car_id, r.n])
   );
 
+  // PASS 1 — value every car. Nothing is written yet: the shrinkage in pass 2 needs the
+  // market-wide mean trend, which isn't known until every car has been fitted.
   for (const car of cars) {
     const sales = db.prepare("SELECT * FROM sale WHERE car_id = ?").all(car.id);
     // Was hardcoded 0, so listings_count was 0 on all 54,818 rows and computeLiquidity() has
     // never once seen real supply — months-of-supply and the liquidity verdict were derived
     // from an assumed-empty market.
     const result = computeValuation(car, sales, listingCounts.get(car.id) ?? 0);
-    upsertValuation(db, result);
     results.push({ car, result });
+  }
+
+  // PASS 2 — shrink each car's conservative trend toward the population mean and persist.
+  // The mean is taken over cars that produced a trustworthy trend at all, so cars the engine
+  // refused to call don't drag the baseline around.
+  const trended = results.filter((r) => r.result.annualReturn != null);
+  const populationMeanTrend = trended.length
+    ? trended.reduce((a, r) => a + r.result.annualReturn, 0) / trended.length
+    : 0;
+
+  for (const { result } of results) {
+    result.trendScore = shrinkToward(result.trendLcb, populationMeanTrend, result.trendDf ?? 0);
+    upsertValuation(db, result);
   }
 
   return results;
