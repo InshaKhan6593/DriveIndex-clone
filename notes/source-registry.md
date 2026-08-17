@@ -76,20 +76,50 @@ Two land mines worth naming:
 
 ## Per-source field availability (measured, `resolve/per-source-report.js`)
 
-| Field | bat | cab | bon | mecum |
-|---|---|---|---|---|
-| price | 100% | 100% | 100% | 100% |
-| sold_at | 100% | 100% | 100% | **100%** (was 0% — fixed) |
-| mileage | 81% | 100% | 50% | 50% |
-| vin_raw | 96% | 100% | 100% | 50% |
-| transmission | 93% | 100% | 100% | 100% |
-| color | 79% | 100% | 25% | **100%** (was 0% — fixed) |
+⚠️ **The table that used to sit here was measured on a hand-checked sample of a few records per
+source and was wildly wrong at scale** — it claimed BaT mileage 81% and Bonhams VIN 100%. Below
+is the whole corpus, counted from the database (2026-08-18, `scratchpad/per-source.js` shape:
+`COUNT(*) WHERE field IS NOT NULL AND field != ''`, grouped by source). Re-run it rather than
+trusting any transcribed copy.
 
-**Cars & Bids is the highest-quality source** — a clean `<dl>` spec table, 100% on every
-field. **Mecum is second** once fixed: it publishes labelled `MAKE`/`MODEL`/`EXTERIOR COLOR`
-fields, which are stronger evidence than parsing the title prose. **Bonhams is the weakest**:
-no spec table at all, everything lives in catalogue prose, so extraction there is
-best-effort and marked low-confidence in the adapter.
+| Field | bat | cab | mecum | rms | good | broadarrow | sms | bon |
+|---|---|---|---|---|---|---|---|---|
+| **rows** | **162,012** | **35,609** | **7,300** | **2,676** | **2,030** | **252** | **25** | **24** |
+| price | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
+| sold_at | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
+| mileage | **0%** | **100%** | 0% | 0% | 0% | 0% | 0% | 38% |
+| vin | 0% | 0% | 0% | 0% | 0% | 77% | 0% | 96% |
+| transmission | 0% | 38% | 0% | 0% | 0% | 0% | 0% | 100% |
+| color | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 13% |
+| image_url | 100% | 100% | 0% | 0% | 0% | 0% | 100% | 0% |
+| price_usd | 100% | 100% | 100% | **68%** | **93%** | **60%** | 100% | 100% |
+
+**Cars & Bids remains the highest-quality source** — 100% mileage, the only source that gives it
+at volume. **BaT is 77% of the corpus and supplies 0% mileage**, which is the single biggest
+quality constraint in the system: the odometer is on its detail page, not the list API the
+crawler uses.
+
+**The `price_usd` gaps are the currency bug, visible per-source.** RM at 68%, Broad Arrow at 60%
+and Gooding at 93% are the international sales whose EUR/GBP/CHF prices were never converted —
+`engine/clean.js` drops every one of them from the maths.
+
+### ⚠️ Structured identity is available and thrown away
+
+`adapters/schema.js` has **no `make`, `model` or `year` field**. Every source is funnelled through
+a single `title` string, which `resolve/` then re-parses to recover identity. For sources that
+publish prose titles (BaT, Gooding, Broad Arrow, Bonhams) that is unavoidable. For three sources
+it is pure loss:
+
+| source | what it publishes | what the adapter does |
+|---|---|---|
+| DuPont Registry | `data.year`, `data.make`, `data.model` as separate JSON fields | `crawler/dupont-adapt.js:53` joins them into `"${year} ${make} ${model}"` |
+| Sotheby's Motorsport | `v.year`, `v.make`, `v.model` as separate JSON fields | `crawler/sms-adapt.js:26` — same concatenation |
+| Mecum | labelled `MAKE` / `MODEL` / `EXTERIOR COLOR` fields on the page | `crawler/mecum-adapt.js:53` rebuilds the title from the URL slug instead |
+
+Stated identity is strictly stronger evidence than parsed prose, and discarding it sends work to
+the review queue that never needed to go there. Fixing it means adding optional
+`make`/`model`/`year` to the record contract and having `resolveCarV2` prefer stated fields,
+falling back to title parsing only when they are absent.
 
 ## Source-specific quirks found in real data
 
