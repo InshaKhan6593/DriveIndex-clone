@@ -15,8 +15,8 @@ Probed live 2026-08-15 with `node crawler/probe-all-sources.js`. Machine-readabl
 | Sotheby's Motorsport | `sms` | yes | 18 | yes | **built (2026-08-16)** | **built — PARTIAL, ~30/729 lots, see below** |
 | RM Sotheby's | `rms` | yes | 17 | no (detail only) | partial | — |
 | Gooding & Company | `good` | yes | 4 | no | **built (2026-08-16)** | **built — 1,975 sales, 41/41 auctions** |
-| Broad Arrow Auctions | `broadarrow` | yes | 1 | no (detail only) | **built (2026-08-17)** | **built — PARTIAL, 80/2,697 lots (one closed event), see below** |
-| DuPont Registry | `dupont` | yes (needs real browser UA) | 23 (old route, now redirects) | yes (server-rendered) | **built (2026-08-17)** | **built — listings only, 133/~15,000 VDPs (bounded sample), see below** |
+| Broad Arrow Auctions | `broadarrow` | yes | 1 | no (detail only) | **built (2026-08-17)** | **built — 252 sales + 172 listings, 8/33 events, see below** |
+| DuPont Registry | `dupont` | yes (needs real browser UA) | 23 (old route, now redirects) | yes (server-rendered) | **built (2026-08-17)** | **built — listings only, 4,786 VDPs, sitemaps 1–6 of 15, see below** |
 | PCAR Market | `pcar` | **robots.txt names ClaudeBot, `Disallow: /`** | — | — | — | **will not build — explicit, targeted block, not a generic wall** |
 | Broad Arrow | `broadarrow` | yes | 1 | no | — | — |
 | Collecting Cars | `collectingcars` | yes | 0 | no | — | — |
@@ -282,11 +282,26 @@ name next to its closing date (`<h2 class='top'>18 August 2022</h2><h2 class='mi
 Center 2022</h2>`) — matched against the branch name printed on each lot page. Multi-day events
 use the closing day, same policy as Gooding/RM.
 
-**`robots.txt` states `Crawl-delay: 10`, honored.** Harvesting all ~2,697 sitemap-listed lots at
-that rate is ~7.5 hours, deliberately out of scope for a first pass. Harvested one bounded,
-confirmed-closed event instead (93 lots → 80 sales, 68 landed in `sale` after resolution) — same
-shape as the existing Bonhams sample. `crawler/broadarrow.crawler.js [eventCodePrefix]` takes an
-event-code prefix (from the URL, e.g. `jc22`) to extend this to more events later.
+**`robots.txt` states `Crawl-delay: 10`, honored.** Harvesting all ~2,694 sitemap-listed lots at
+that rate is ~7.5 hours. `crawler/broadarrow.crawler.js [eventCodePrefix]` takes an event-code
+prefix (from the URL, e.g. `jc22`) so the work is done one bounded event at a time.
+
+**Progress (2026-08-17): 8 of 33 events, 252 sales + 172 listings.** The sitemap's 2,694 vehicle
+pages span 33 distinct event codes; a survey of all of them is in
+`_archive`-adjacent scratch work, but the counts are recoverable by re-running the sitemap fetch.
+Events harvested: `jc22`, `po26`, `gi26u`, `gi26e`, `lv25`, `dg25`, `mb26`, `ql26`, `zt26`,
+`gi26z`, plus the five one-to-two-lot codes (`ad26`, `dg26`, `ms24`, `ba`, `cm26`). Largest
+untouched: `pb22` (187), `am26` (177), `jc23`/`jc25` (171 each), `am25` (168), `jc24` (157).
+
+**Extended to emit listings as well as sales (2026-08-17).** A page showing `Estimate: $X - $Y`
+was previously just skipped. But an upcoming-consignment estimate is real, current,
+auction-house-published pricing for a car genuinely for sale — exactly what the `listing` table
+is for. Now emitted as `kind: "listing"` with `price` = the estimate **midpoint** and the true
+bounds preserved in `_extra.estimateLow/estimateHigh`. Never conflated with `kind: "sale"`, so an
+estimate can never be mistaken for a hammer price downstream.
+
+⚠️ **Not all "upcoming" events yield listings.** `gi26v` (41 lots) returned neither price nor
+estimate on any lot — an event announced but not yet priced. Correctly skipped, zero rows.
 
 ## DuPont Registry: server-rendered VDPs, `/api/` deliberately avoided (2026-08-17)
 
@@ -327,6 +342,16 @@ about DuPont (§3: it flags a risk of asks leaking into sold-price maths — not
 **A VIN of all zeros (`00000000000305971`) is a placeholder**, not a real chassis number —
 seen on at least one real listing (a 1967 Porsche 911) where the actual VIN isn't disclosed.
 Adapter nulls it out rather than feeding it to `normalizeVin()`.
+
+**Progress (2026-08-17): 4,786 listings from sitemaps 1–6 of 15.** ~900 real listings per
+sitemap run, with 67–104 skipped each time (`no price posted (call for price / not disclosed)` is
+the dominant reason, plus a few pages with no parseable `listingData`). Sitemaps 7–15 (~9,000
+more URLs) are untouched. `crawler/dupont.crawler.js [sitemapN] [maxUrls]` resumes per-URL via
+`samples/dupont.state.json`, so re-running is safe and never re-fetches.
+
+**Best field coverage of any source we have**: `mileage` 96.2% and `vin` 98.7% on DuPont rows,
+against 16.9% / 0.1% respectively across the whole `sale` table. It contributes no sold prices,
+but it is the only source giving reliable VINs at volume.
 
 **Side effect worth knowing**: building this required first discovering that `listing` had no
 natural key at all (no `source_lot_id`, no unique constraint) and that nothing had ever ingested

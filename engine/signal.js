@@ -19,6 +19,31 @@ const MIN_SALES_FOR_SIGNAL = 3; // below this, always "insufficient" — matches
 const STABLE_BAND = 0.03; // +/-3% annualized treated as flat, not a directional call — arbitrary, not spec-confirmed
 const RECENT_WINDOW_DAYS = 365;
 
+// ── TIME-SPAN GATE (added 2026-08-17 after a real defect) ─────────────────────────────────
+// The count gate above is not sufficient on its own: n counts SALES, not TIME. Four sales in
+// one week satisfy n>=3, and their slope — fitted per YEAR — then gets extrapolated 50x.
+// Measured on live data before choosing this threshold: of cars whose whole clean-sale
+// history spans <30 days, 40% produced |annualReturn| > 100%; 30-90d: 37%; 90-180d: 21%;
+// 180-365d: 8%; 2y+: ~0%. The worst case reached +2.6e15 %/yr on a 2013 Ford E-350 whose four
+// sales spanned 7 days — displayed to users as "Buy Now (Rising Fast)".
+//
+// 180 days = at most a 2x extrapolation to reach an annual figure. Below that we do not have
+// a year's worth of evidence and say so, rather than inventing one.
+const MIN_SPAN_DAYS = 180;
+
+// Second, independent guard. Even above the span gate a degenerate fit (all sales clustered at
+// one end of an otherwise long window) can explode. A collector car genuinely doubling in a
+// year is real and must survive; a fit implying it TRIPLES every year is describing noise, not
+// a market. Out-of-band means "this regression is not trustworthy" — reported as insufficient
+// rather than silently clamped, because a clamped value looks like a real reading.
+const MAX_PLAUSIBLE_ANNUAL = 2.0; // +200%/yr
+
+function spanDays(points) {
+  if (points.length < 2) return 0;
+  const times = points.map((p) => p.yearsAgo);
+  return (Math.max(...times) - Math.min(...times)) * 365.25;
+}
+
 function toYearsAgo(isoDate) {
   return (Date.now() - new Date(isoDate).getTime()) / (365.25 * 86400000);
 }
@@ -45,16 +70,30 @@ function classifySignal(cleanSales, ctx) {
     logPrice: Math.log(Math.max(mileageAdjust(s.price_usd ?? s.price, s.mileage ?? ctx.avgMiles, ctx.avgMiles, ctx.collectibility, ctx.age), 1)),
   }));
 
+  const volatility = volatilityOf(cleanSales.map((s) => s.price_usd ?? s.price));
+
+  // Not enough TIME to make a per-year claim, however many sales there are.
+  if (spanDays(normalized) < MIN_SPAN_DAYS) {
+    return { signal: "insufficient", annualReturn: null, recentReturn: null, volatility, rSquared: 0, n };
+  }
+
   const longWindow = linearRegression(normalized.map((p) => ({ x: p.yearsAgo, y: p.logPrice })));
   const annualReturn = annualizedReturnFromSlope(longWindow.slope);
 
+  // Degenerate fit — the slope is describing noise, not a market.
+  if (!Number.isFinite(annualReturn) || Math.abs(annualReturn) > MAX_PLAUSIBLE_ANNUAL) {
+    return { signal: "insufficient", annualReturn: null, recentReturn: null, volatility, rSquared: longWindow.rSquared, n };
+  }
+
+  // Same reasoning for the short window: two sales days apart annualize to nonsense, so the
+  // recent read only counts when it too covers real time. Falls back to the long-window rate.
   const recentCutoffYears = RECENT_WINDOW_DAYS / 365.25;
   const recentPoints = normalized.filter((p) => p.yearsAgo <= recentCutoffYears);
-  const recentReturn = recentPoints.length >= 2
-    ? annualizedReturnFromSlope(linearRegression(recentPoints.map((p) => ({ x: p.yearsAgo, y: p.logPrice }))).slope)
-    : annualReturn;
-
-  const volatility = volatilityOf(cleanSales.map((s) => s.price_usd ?? s.price));
+  let recentReturn = annualReturn;
+  if (recentPoints.length >= 2 && spanDays(recentPoints) >= MIN_SPAN_DAYS) {
+    const r = annualizedReturnFromSlope(linearRegression(recentPoints.map((p) => ({ x: p.yearsAgo, y: p.logPrice }))).slope);
+    if (Number.isFinite(r) && Math.abs(r) <= MAX_PLAUSIBLE_ANNUAL) recentReturn = r;
+  }
 
   let signal;
   if (Math.abs(annualReturn) < STABLE_BAND) {
@@ -72,4 +111,4 @@ function classifySignal(cleanSales, ctx) {
   return { signal, annualReturn, recentReturn, volatility, rSquared: longWindow.rSquared, n };
 }
 
-module.exports = { classifySignal, MIN_SALES_FOR_SIGNAL, STABLE_BAND };
+module.exports = { classifySignal, MIN_SALES_FOR_SIGNAL, STABLE_BAND, MIN_SPAN_DAYS, MAX_PLAUSIBLE_ANNUAL };

@@ -8,33 +8,49 @@ Built as a feature-equivalent rebuild of **driveindex.com**, working from
 responses and rendered pages, where every claim carries an evidence class (`[V]` verified,
 `[M]` measured, `[I]` inferred, `[U]` unknown).
 
+> ⚠️ **That research file is not in this repository.** It is cited by section number throughout
+> the code and these notes (`§4.5`, `§7.2`, …) and those citations were accurate when written,
+> but the document itself was never committed — so the `[V]`/`[M]` evidence classes cannot
+> currently be re-checked against their source. Anything marked verbatim-verified should be
+> treated as unverifiable until it is restored.
+
 ---
 
 ## Where it stands
 
 | | ours | DriveIndex |
 |---|---|---|
-| sales | **209,741** | 110,043 |
-| cars | 54,885 | 7,148 (model+generation ranges) |
+| sales | **209,928** | 110,043 |
+| **listings (for-sale now)** | **4,975** (4,958 active) | ~35,309 |
+| cars | 55,934 | 7,148 (model+generation ranges) |
 | **sales per car** | **3.82** | — |
-| cars with repeat sales | 22,469 | — |
-| distinct makes | 351 | 84 |
+| cars with repeat sales | 22,495 | — |
+| distinct makes | 357 | 84 |
 | date range | 2014-07-30 → 2026-08-16 | — |
-| review queue | 26,722 (12.7%) | none — they ingest everything |
+| review queue | 27,238 (13.0%) | none — they ingest everything |
 
-Sources with data — **7 of 13**, and the top 4 are DriveIndex's #1–#4, carrying **~90% of their
-measured source mix**:
+Sources with **sales** — **8 of 13**, and the top 4 are DriveIndex's #1–#4, carrying **~90% of
+their measured source mix**:
 
 | source | sales | their mix |
 |---|---|---|
-| Bring a Trailer | 162,000 | 72.2% |
-| Cars & Bids | 35,585 | 5.5% |
-| Mecum | 7,293 | 6.4% |
-| RM Sotheby's | 2,711 | 6.2% |
-| Gooding & Company | 2,029 | not in their mix (they don't carry it) |
-| Broad Arrow | 68 (sample — see below) | not in their mix |
-| Bonhams | 30 (sample) | 3.4% |
+| Bring a Trailer | 162,012 | 72.2% |
+| Cars & Bids | 35,609 | 5.5% |
+| Mecum | 7,300 | 6.4% |
+| RM Sotheby's | 2,676 | 6.2% |
+| Gooding & Company | 2,030 | not in their mix (they don't carry it) |
+| Broad Arrow | 252 | not in their mix |
 | Sotheby's Motorsport | 25 (partial — see below) | not in their mix |
+| Bonhams | 24 (sample) | 3.4% |
+
+Sources with **listings** — asking-price inventory, a separate table from `sale` and never
+mixed into it:
+
+| source | listings | what they are |
+|---|---|---|
+| DuPont Registry | 4,786 | dealer/private asking prices (no auction) |
+| Broad Arrow | 172 | upcoming-auction consignments, price = estimate midpoint |
+| RM Sotheby's | 17 | upcoming consignments |
 
 **Verified at this scale:** 0 hard splits · 0 duplicate lot keys · 0 same-physical-car
 cross-source duplicates · 0 duplicate car identities · 0 NULL-attribute splits ·
@@ -77,6 +93,74 @@ of settling. Root cause was two independent, real things, not one bug:
   the code) and ~15 confirmed motorcycle/moped marques — cutting the pending queue from 21,169 to
   a base that, combined with the fixes above, nets out at 26,722 after also absorbing a much
   larger corpus (see the source counts above).
+
+---
+
+## Engine defects found by audit and fixed (2026-08-17)
+
+An audit of the valuation logic — not the data — found three defects producing **visibly false
+output**. All three are fixed and the whole catalogue recomputed.
+
+**1. The regression had no minimum time-span guard.** `classifySignal()` gated on sale *count*
+(`n >= 3`) but never on the *time* those sales spanned. Four sales in one week satisfied the
+count gate, and their slope — fitted per year — was extrapolated ~50x. Worst real case: a 2013
+Ford E-350 van whose four sales spanned **7 days** was published as
+
+```
++2,655,925,070,192,485 %/yr · Appreciating · "Buy Now (Rising Fast)"
+```
+
+The dollar forecasts looked sane the whole time, because `forecast.js` clamps by
+collectibility — so only the *rate* and the *buy/sell call* were garbage, which is exactly the
+part a user acts on. Threshold chosen from measured data rather than guessed:
+
+| clean-sale span | share with \|annualReturn\| > 100% |
+|---|---|
+| < 30 days | 40% |
+| 30–90 days | 37% |
+| 90–180 days | 21% |
+| 180–365 days | 8% |
+| 2 years+ | ~0% |
+
+Now gated at **180 days minimum span** (at most a 2x extrapolation to make an annual claim) plus
+an independent **±200%/yr plausibility bound**. Both report `insufficient` rather than silently
+clamping — a clamped number reads as a real measurement. Result: readings above 1000%/yr went
+**21 → 0**, above 1,000,000%/yr **2 → 0**, max reading now 197.8%. Cost: directional signals
+11,347 → 11,068, i.e. **2.5% less coverage to remove every absurd reading**.
+
+**2. Reserve-not-met bids were served and displayed as completed sales.** The engine correctly
+excluded them from the maths, but `serializeSale()` never exposed `status`, so the client had no
+way to tell them apart. One Porsche detail page listed 20 "sales" of which **6 were
+`reserve_not_met`** — and the price-history chart was drawing a trend line through sales that
+never happened. `status` is now part of the sale payload; the table labels and de-emphasises
+bids, the "Sold (N)" count excludes them, and the chart plots transactions only.
+
+**3. `nightly-compute.js` passed a hardcoded `0` for listings.** So `listings_count` was 0 on
+**all 54,818 valuation rows** and `computeLiquidity()` had never once seen real supply —
+months-of-supply and every liquidity verdict were derived from an assumed-empty market. It also
+inner-joined `sale`, so **1,008 cars with live listings but no sales got no valuation row at
+all** (their pages rendered blank). Both fixed: `listings_count` now sums to 4,958, exactly
+matching active listings with a resolved car, and 0 cars are missing a row.
+
+### Known-wrong, not yet fixed
+
+Found by the same audit, lower severity — none produce visibly false claims, but they quietly
+distort numbers:
+
+- **The mileage anchor is unreliable.** `avgMileage` normalises every price, but of 300 sampled
+  cars with ≥10 sales, **136 (45%) have zero clean sales reporting mileage** and fall back to a
+  hardcoded 50,000; another 64 anchor the entire model's curve on 1–2 reported values.
+- **Recency weighting flattens.** `Math.max(1, round(w*10))` means everything **≥3 years old is
+  weighted identically** — a 4-year-old sale counts the same as a 30-year-old one.
+- **`volatilityOf()` is fed raw prices** while its own docstring says mileage-normalised, so
+  confidence is penalised for mileage spread it was meant to have removed.
+- **The collectibility bootstrap uses dirty data** — `bootstrapValue` averages *all* sales
+  including reserve-not-met and damaged, and that score then steers outlier detection and the
+  mileage curve.
+- **Outlier detection is time-blind.** MAD compares each sale to the median with no time
+  weighting, so a genuine market re-rating is indistinguishable from noise. Observed: a 1997
+  911 Carrera 4 whose three most recent sales ($113k/$158k/$179k) were all excluded as outliers,
+  leaving the value pinned at $62,886.
 
 ---
 
@@ -384,6 +468,35 @@ node ingest/ingest-listings.js      # samples/listings/*.json -> `listing`
 node jobs/nightly-compute.js
 ```
 
+### API and frontend
+
+```bash
+node api/server.js                        # read API on :3000
+npm --prefix web run dev                  # Next.js frontend on :3001
+```
+
+`web/.env.local` needs `ACCESS_CODE` (the shared login code) and `API_URL`.
+
+**Frontend** — Next.js 16 App Router + shadcn/ui, deliberately monochrome. Three routes:
+
+- `/login` — single shared access code, no accounts table. Checked server-side and exchanged for
+  an HMAC-signed httpOnly cookie, so it can't be forged by setting a cookie in devtools.
+  `src/proxy.ts` gates every other route. (Next 16 renamed `middleware.ts` → `proxy.ts`.)
+- `/` — catalogue browse: server-side filtering by make / body / year bucket / price band /
+  for-sale-now / free-text, sortable, paginated.
+- `/cars/[id]` — price-history chart with range toggle, Sold + For Sale tables with source
+  links, signal, forecast with bear/bull bands, collectibility, liquidity, seasonality, and a
+  live mileage re-pricer backed by the engine's real `mileageAdjust()`.
+
+**No tier gating is applied in this phase** — `fetchCars()` requests `tier=collector` so every
+computed field is visible. The gating architecture in `api/serialize.js` is intact and unchanged;
+only the caller is permissive. Tier still comes from a query parameter and **must** move to the
+session record before this is public.
+
+`MAKE_GROUPS` in `api/server.js` collapses Mercedes-Benz / Mercedes-AMG / Mercedes-Maybach into
+one browse filter while keeping them separate catalogue entries — they have genuinely different
+price curves. Verified against the data: Mercedes is the only such family in the catalogue.
+
 ### What resumes from where
 
 | stage | marker | unit |
@@ -420,22 +533,47 @@ node jobs/engine-health.js                # is the engine producing usable outpu
 
 ## Known gaps
 
-**Listings: no longer zero, still thin.** 137 real asking-price listings now populate the
-`listing` table (120 DuPont Registry, 17 RM Sotheby's private-sale asks that had been sitting
-scraped-but-never-ingested since before this source existed — `ingest/ingest-listings.js` didn't
-exist until 2026-08-17, so nothing had ever loaded them). Still a small bounded sample of
-DuPont's ~15,000 sitemap-listed vehicles (200 fetched, 133 real listings, 67 sold/no-price/etc.)
-— the four listing-dependent features (N listed, months-of-supply, deal score, price-cut
-pressure) now have real, if sparse, input rather than none.
+**Listings: 4,975 vs DriveIndex's ~35,309.** Up from 137 on 2026-08-17. DuPont Registry
+sitemaps 1–6 harvested (~6,000 URLs of ~15,000 listed); sitemaps 7–15 untouched. Broad Arrow
+contributes 172 upcoming-consignment estimates across 8 events; ~2,200 lots across 25 more
+events remain unharvested at their mandated 10s crawl-delay.
 
-**14% of cars get a signal** vs their 45.4%. Grain, not quality: our rows are exact model-years,
-theirs are generation ranges. Real fix is generation extraction (**0.8% populated**), not
+### Field coverage — measured, not estimated
+
+The blocker for most unbuilt features is a specific empty column, and they fall into three very
+different categories:
+
+| field | coverage | why it's empty |
+|---|---|---|
+| `sale.mileage` | **16.9%** | BaT is **0.04%** (71 / 162,012) vs Cars & Bids **99.5%** — and BaT is 77% of the corpus |
+| `sale.vin` | 0.1% | not in BaT's list API (but `listing.vin` is **98.7%**, from DuPont) |
+| `sale.transmission` | 6.6% | detail-page only |
+| `sale.color` / `sale.options` | ~0.04% | detail-page only — blocks Spec Premiums entirely |
+| `car.generation` | **0.9%** | not scrapable; a per-marque curation project |
+| `car.body_type` | 37.7% | partially title-inferable, rest needs per-model rules |
+| `car.msrp` / `hp` / `zero_sixty` / `production` | **0%** | **no auction house publishes these** — needs a spec database |
+| `car_valuation.peak_price` / `from_peak` / `market_repricing` / `class_rank` | **0%** | **not a data gap — nothing computes them yet** |
+| `listing.image_url` | 0% | not captured by the DuPont/Broad Arrow adapters |
+
+Three categories, in order of what they cost to close:
+
+1. **Engine code only, no scraping** — `peak_price`, `from_peak`, momentum, `class_rank`.
+   Estimated-bottom is already computed and simply never displayed.
+2. **Data is on pages we already crawl, we just don't parse it** — BaT mileage/VIN/transmission
+   (detail pages), listing images, and FX rates for the **1,114 EUR/GBP/CHF sales** currently
+   dropped from all maths because `price_usd` is null.
+3. **Needs a source we don't have** — MSRP, hp, 0-60, production. Only two of DriveIndex's
+   advertised features are genuinely blocked here: MSRP-based stats and spec-level option
+   premiums.
+
+⚠️ **BaT mileage — the cheap fix is a trap.** 23.9% of BaT titles state mileage, but only when
+it is *notably low* ("7k-Mile 2005 Evo VIII"). Parsing titles alone harvests a low-mileage-biased
+subsample, drags `avgMileage` down and makes every mileage adjustment systematically wrong —
+worse than the current honest gap. The correct fix is detail-page scraping, not a regex.
+
+**20% of cars get a signal** vs their 45.4%. Grain, not quality: our rows are exact model-years,
+theirs are generation ranges. Real fix is generation extraction (**0.9% populated**), not
 grouping — tested, and grouping alone made the ratio *worse*.
-
-**`body_type` 36.9% populated.** An "SUV" filter would show 9 cars.
-
-**BaT mileage 0.1%** across 124,412 sales — the odometer is on their detail page, not the list
-API. Cars & Bids is 99.5%, giving 36.6% overall.
 
 **Mecum discovery** finds events via `/results/` (21 years deep), but past-event slugs are not
 uniform (`kissimmee-2022` works, `indy-2022` does not exist).
@@ -451,10 +589,12 @@ uniform (`kissimmee-2022` works, `indy-2022` does not exist).
 crawler/     harvesters + adapters, one pair per source
 resolve/     title -> car identity; vocabulary; evidence layer
 engine/      valuation, signal, forecast, liquidity, collectibility
-ingest/      scraped JSON -> sale table
+ingest/      scraped JSON -> sale / listing tables
 dedup/       VIN/URL/score-based duplicate collapse
 validation/  audits and health checks
 jobs/        cron orchestrator, nightly compute, status
+api/         read API + the single tier-gating choke point
+web/         Next.js 16 frontend (shadcn/ui, access-code auth)
 notes/       source registry, reconciliation report, onboarding playbook
 _archive/    one-off probes and superseded crawlers, kept for provenance
 ```

@@ -14,7 +14,11 @@ function tierAtLeast(tier, min) {
 }
 
 function serializeSale(sale, tier) {
-  const base = { date: sale.sold_at, mileage: sale.mileage };
+  // `status` is NOT optional detail — without it the client cannot tell a completed sale from
+  // a reserve-not-met high bid, and will render a failed auction as a sold price. (That is
+  // exactly what happened: one Porsche detail page listed 20 "sales" of which 6 were
+  // reserve_not_met.) Enum per db/schema.sql: sold | sold_after | reserve_not_met.
+  const base = { date: sale.sold_at, mileage: sale.mileage, status: sale.status ?? "sold" };
   if (!tierAtLeast(tier, "pro")) {
     return { ...base, price: null, source: null, url: null };
   }
@@ -27,22 +31,46 @@ function serializeCarSummary(car, valuation, tier) {
     year: car.year,
     make: car.make,
     model: car.model,
+    bodyType: car.body_type ?? null,
+    generation: car.generation ?? null,
+    imageUrl: car.image_url ?? null,
     currentValue: valuation?.current_value ?? null,
+    salesCount: valuation?.sales_count ?? 0,
+    listingsCount: car.listings_count ?? 0,
     signal: tierAtLeast(tier, "pro") ? valuation?.signal ?? null : null,
     confidence: tierAtLeast(tier, "pro") ? valuation?.confidence ?? null : null,
     soldGated: !tierAtLeast(tier, "pro"),
   };
 }
 
-function serializeCarDetail(car, valuation, sales, tier) {
+function serializeListing(listing, tier) {
+  const base = { firstSeen: listing.first_seen_at, mileage: listing.mileage };
+  if (!tierAtLeast(tier, "pro")) {
+    return { ...base, price: null, source: null, url: null };
+  }
+  return { ...base, price: listing.price, currency: listing.currency, source: listing.source, url: listing.url };
+}
+
+function serializeCarDetail(car, valuation, sales, tier, listings = [], fallbackImage = null) {
   const sortedSales = [...sales].sort((a, b) => new Date(b.sold_at) - new Date(a.sold_at));
   const visibleSales = tierAtLeast(tier, "pro") ? sortedSales : sortedSales.slice(0, 5);
+  const activeListings = listings.filter((l) => l.is_active);
 
   return {
     id: car.id,
     year: car.year,
     make: car.make,
     model: car.model,
+    bodyType: car.body_type ?? null,
+    generation: car.generation ?? null,
+    imageUrl: car.image_url ?? fallbackImage,
+    // Structured specs — currently 0% populated across the catalogue by any adapter (no
+    // source publishes them in a form we've parsed yet). Left in the shape rather than
+    // omitted so the frontend can distinguish "not on file" from "field doesn't exist",
+    // and so this stops being a manual wiring job the day an adapter starts filling them in.
+    hp: car.hp ?? null,
+    zeroSixty: car.zero_sixty ?? null,
+    production: car.production ?? null,
     msrp: car.msrp,
     soldGated: !tierAtLeast(tier, "pro"),
 
@@ -84,7 +112,10 @@ function serializeCarDetail(car, valuation, sales, tier) {
 
     salesCount: valuation?.sales_count ?? sales.length,
     sales: visibleSales.map((s) => serializeSale(s, tier)),
+
+    listingsCount: activeListings.length,
+    listings: activeListings.map((l) => serializeListing(l, tier)),
   };
 }
 
-module.exports = { serializeCarSummary, serializeCarDetail, tierAtLeast, TIERS };
+module.exports = { serializeCarSummary, serializeCarDetail, serializeListing, tierAtLeast, TIERS };

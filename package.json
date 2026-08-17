@@ -21,6 +21,7 @@
     "validate": "node validation/split-audit.js && node validation/duplication-audit.js && node validation/null-attribute-splits.js"
   },
   "dependencies": {
+    "cors": "^2.8.6",
     "crawlee": "^3.18.1",
     "express": "^5.2.1",
     "playwright": "^1.62.1"

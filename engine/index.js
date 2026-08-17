@@ -50,6 +50,9 @@ function computeValuation(car, allSales, activeListingsCount = 0, opts = {}) {
       carId: car.id, computedAt: new Date().toISOString(),
       signal: "insufficient", confidence: 0, confidenceLevel: "low",
       salesCount, outlierCount, cleanSalesCount: 0,
+      // Was omitted on this branch, so a car with live listings but no clean sales stored
+      // listings_count = 0 even when the caller passed a real count.
+      listingsCount: activeListingsCount,
       dataBasis: "auction", valueBasis: "listing",
       currentValue: null, segment,
       collectibilityScore: collect.score, collectibilityReasons: collect.reasons,

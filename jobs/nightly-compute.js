@@ -111,12 +111,28 @@ function upsertValuation(db, result) {
 }
 
 function runNightlyCompute(db) {
-  const cars = db.prepare("SELECT DISTINCT c.* FROM car c JOIN sale s ON s.car_id = c.id").all();
+  // Cars with LISTINGS but no sales were previously skipped entirely (the old query inner-
+  // joined `sale`), leaving 1,008 cars with live inventory and no valuation row at all —
+  // their pages rendered a blank value. They still can't be valued without sales, but they
+  // get a row carrying listings_count and an honest "insufficient" signal.
+  const cars = db.prepare(`
+    SELECT * FROM car WHERE id IN (SELECT car_id FROM sale)
+       OR id IN (SELECT car_id FROM listing WHERE is_active = 1 AND car_id IS NOT NULL)
+  `).all();
   const results = [];
+
+  // One grouped query rather than a per-car lookup inside the loop — this runs over ~56k cars.
+  const listingCounts = new Map(
+    db.prepare("SELECT car_id, COUNT(*) n FROM listing WHERE is_active = 1 AND car_id IS NOT NULL GROUP BY car_id")
+      .all().map((r) => [r.car_id, r.n])
+  );
 
   for (const car of cars) {
     const sales = db.prepare("SELECT * FROM sale WHERE car_id = ?").all(car.id);
-    const result = computeValuation(car, sales, 0);
+    // Was hardcoded 0, so listings_count was 0 on all 54,818 rows and computeLiquidity() has
+    // never once seen real supply — months-of-supply and the liquidity verdict were derived
+    // from an assumed-empty market.
+    const result = computeValuation(car, sales, listingCounts.get(car.id) ?? 0);
     upsertValuation(db, result);
     results.push({ car, result });
   }
