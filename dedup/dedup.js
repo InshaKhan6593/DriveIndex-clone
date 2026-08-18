@@ -27,6 +27,39 @@ function isValidVin(raw) {
   return v.length !== 17 || VIN_17.test(v); // exactly 17 chars must be a legal modern VIN
 }
 
+// Position 10 of a 17-char VIN encodes the MODEL YEAR (ISO 3779 / 49 CFR 565) on a 30-year
+// cycle: A..Y (no I, O, Q, U, Z) = 1980..2000, 1..9 = 2001..2009, then the cycle repeats from
+// 2010. A code therefore has two candidate years 30 apart, which is still enough to catch a VIN
+// attached to the wrong car.
+const VIN_YEAR_CODES = "ABCDEFGHJKLMNPRSTVWXY123456789";
+
+/** @returns {number[]|null} the two model years a 17-char VIN's year code can mean. */
+function vinModelYears(raw) {
+  const v = normalizeVin(raw);
+  if (!v || v.length !== 17) return null;
+  const i = VIN_YEAR_CODES.indexOf(v[9]);
+  if (i < 0) return null;
+  return [1980 + i, 2010 + i];
+}
+
+/**
+ * Does a VIN's own year code agree with the year claimed for the car?
+ *
+ * Auction catalogues copy-paste. Bonhams lot 25719-178 is titled "2012 Mercedes-Benz SLS
+ * Roadster" but carries WDDAJ76F96M001144 — a 2006 SLR McLaren VIN, the same one printed on
+ * lot 168 of that very sale. Storing it made two different cars share a vin_normal, which
+ * silently corrupts both cross-source dedup and repeat-sale detection, since both key on VIN.
+ *
+ * Unknown is not disagreement: no VIN, no year, or a non-17-char chassis number all pass. Only
+ * a VIN that positively contradicts the year is rejected. ±1 year of slack because a model year
+ * legitimately runs ahead of the calendar year on early-release cars.
+ */
+function vinYearPlausible(raw, year) {
+  const years = vinModelYears(raw);
+  if (!years || !Number.isFinite(year)) return true;
+  return years.some((y) => Math.abs(y - year) <= 1);
+}
+
 // Layer A — idempotent ingestion key. (source, source_lot_id) is UNIQUE in the sale table;
 // re-scraping the same lot is a no-op upsert keyed on this.
 function upsertKey(sale) {
@@ -194,7 +227,7 @@ function groupRepeatSales(sales) {
 }
 
 module.exports = {
-  normalizeVin, isValidVin, upsertKey, duplicateScore, DUPLICATE_THRESHOLD,
+  normalizeVin, isValidVin, vinModelYears, vinYearPlausible, upsertKey, duplicateScore, DUPLICATE_THRESHOLD,
   SOURCE_TRUST, pickSurvivor, collapseDuplicates, groupRepeatSales, daysApart, trigramSimilarity,
   canonicalListingUrl,
 };

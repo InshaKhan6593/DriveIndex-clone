@@ -23,13 +23,20 @@ function validateRecord(rec) {
 
   if (rec.sold_at != null && !isIsoDateNotFuture(rec.sold_at)) errors.push(`sold_at is not a valid past/present date: ${rec.sold_at}`);
 
-  if (rec.price != null) {
+  // A lot that did not sell may legitimately have NO price. Cars & Bids publishes the high bid
+  // on every unsold lot, so its 7,873 reserve-not-met records all carry a positive number and
+  // this never came up; Bonhams publishes nothing for a bought-in lot, and `sale.price` is
+  // INTEGER NOT NULL, so 0 is how "no bid was published" has to be encoded — `status` is what
+  // distinguishes it from a genuine zero. Treating that as an error made 2,390 real records
+  // "invalid" for describing exactly what happened at the auction.
+  const noSale = rec.reserve_not_met === true || rec.status === "reserve_not_met";
+  if (rec.price != null && !(noSale && rec.price === 0)) {
     if (typeof rec.price !== "number" || !Number.isFinite(rec.price) || rec.price <= 0) {
       errors.push(`price must be a positive number, got: ${rec.price}`);
     } else if (rec.price > 50_000_000) {
       warnings.push(`price is unusually high, verify: ${rec.price}`); // real ceiling ~$70M for the most expensive cars ever sold; flag, don't reject
     }
-  } else if (rec.reserve_not_met !== true) {
+  } else if (rec.price == null && !noSale) {
     warnings.push("price is null but reserve_not_met is not true — expected one or the other");
   }
 
