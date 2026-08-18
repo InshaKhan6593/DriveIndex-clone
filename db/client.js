@@ -6,7 +6,11 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
-const DB_PATH = path.join(__dirname, "..", "data", "driveindex.sqlite");
+// DB_PATH is overridable so a deployed API can point at a snapshot fetched at build time
+// (see render.yaml) without the 249MB working database ever being in the repo.
+const DB_PATH = process.env.DB_PATH
+  ? path.resolve(process.env.DB_PATH)
+  : path.join(__dirname, "..", "data", "driveindex.sqlite");
 
 // ── LOCAL FILE BY DEFAULT, HOSTED WHEN DEPLOYED ────────────────────────────────────────
 // Everything that WRITES (crawlers, ingest, compute, validation) runs on a machine with the
@@ -23,6 +27,10 @@ function openConnection() {
   if (!TURSO_URL) {
     const { DatabaseSync } = require("node:sqlite");
     fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+    // A deployed API serves a snapshot it must never write to. Opening read-only makes that a
+    // guarantee rather than a convention, and surfaces a truncated download as an error here
+    // instead of as mysterious empty results later.
+    if (process.env.DB_READONLY === "1") return new DatabaseSync(DB_PATH, { readOnly: true });
     return new DatabaseSync(DB_PATH);
   }
   // Deliberately required lazily — a local run must not need the dependency installed at all.
@@ -62,7 +70,7 @@ function openDb() {
   // A hosted database is served READ-ONLY: the schema and every migration were already applied
   // on the machine that built the snapshot. Running them again from a serverless handler would
   // mean concurrent DDL on every cold start, for no benefit.
-  if (!TURSO_URL) {
+  if (!TURSO_URL && process.env.DB_READONLY !== "1") {
     migrate(db);
     db.exec(fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8"));
   }

@@ -1,33 +1,40 @@
 # Render blueprint for the READ-ONLY API.
 #
-# Only the API is deployed. Crawling, ingest, compute and validation all run on the machine
-# that holds data/driveindex.sqlite; production serves a snapshot built by db/export-serving.js
-# and uploaded to Turso. Nothing here scrapes anything.
+# NO DATABASE SERVICE. The data is a read-only snapshot, so it travels with the API rather than
+# living in a hosted database. That removes an entire moving part — and on Windows it removes the
+# Turso CLI, which requires WSL and therefore a reboot and a Linux install to upload one file.
 #
-# Why Render rather than a serverless host: `libsql` is a NATIVE module, and this runs it in an
-# ordinary long-lived Node process where that is uncomplicated. It also keeps one warm
-# connection instead of opening a database handle per request on every cold start.
+# The snapshot cannot go in the repo: it is 160MB and GitHub rejects files over 100MB. It is
+# published as a GitHub RELEASE asset instead (2GB limit) and fetched at build time.
 #
-# Deploy: Render dashboard -> New -> Blueprint -> pick this repo. Then set the two secrets
-# below (marked sync:false, so they are never committed).
+# Crawling, ingest and compute never run here. Production serves what was built locally.
+#
+# Deploy: Render -> New -> Blueprint -> this repo. Set SNAPSHOT_URL to the release asset URL.
 services:
   - type: web
     name: driveindex-api
     runtime: node
     plan: free
     region: oregon
-    # `npm ci --omit=dev` deliberately: playwright and crawlee are devDependencies because they
-    # belong to the crawlers, not the API. Installing them here would pull down browser binaries
-    # on every deploy for code this service never loads.
-    buildCommand: npm ci --omit=dev
+    # --omit=dev on purpose: playwright and crawlee are devDependencies belonging to the
+    # crawlers. Installing them would download browser binaries for a service that never scrapes.
+    # -fL so a 404 fails the BUILD loudly rather than deploying an API with no database.
+    buildCommand: |
+      npm ci --omit=dev
+      mkdir -p data
+      curl -fL "$SNAPSHOT_URL" -o data/serving.sqlite
+      node -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('data/serving.sqlite');console.log('snapshot ok:',d.prepare('SELECT COUNT(*) n FROM car').get().n,'cars')"
     startCommand: node api/server.js
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: "22.20.0"
-      # Presence of this is what switches db/client.js from the local file to the hosted
-      # database. Without it the API would look for a 249MB file that is not in the repo.
-      - key: TURSO_DATABASE_URL
-        sync: false
-      - key: TURSO_AUTH_TOKEN
+      - key: DB_PATH
+        value: data/serving.sqlite
+      # Opens the file read-only, so a bug that tries to write fails here rather than silently
+      # mutating a snapshot that gets replaced on the next deploy anyway.
+      - key: DB_READONLY
+        value: "1"
+      # The GitHub release asset URL. sync:false so it is set in the dashboard, not committed.
+      - key: SNAPSHOT_URL
         sync: false
