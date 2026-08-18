@@ -4,6 +4,7 @@ node_modules/
 # GitHub's 100MB file limit, and there's no reason to version a data file.
 data/
 *.sqlite
+serving.sqlite
 *.sqlite.bak
 *.db
 

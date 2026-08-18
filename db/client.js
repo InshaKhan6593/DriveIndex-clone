@@ -2,12 +2,33 @@
 // zero native-module install risk — no node-gyp/build-tools dependency, which matters on
 // a fresh machine that may not have a C++ toolchain configured).
 
-const { DatabaseSync } = require("node:sqlite");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
 const DB_PATH = path.join(__dirname, "..", "data", "driveindex.sqlite");
+
+// ── LOCAL FILE BY DEFAULT, HOSTED WHEN DEPLOYED ────────────────────────────────────────
+// Everything that WRITES (crawlers, ingest, compute, validation) runs on a machine with the
+// file and needs nothing here. Only the read-only API is deployed, and it cannot ship a
+// 249MB file, so it points at a hosted libSQL database instead.
+//
+// `libsql` is used rather than `@libsql/client` on purpose: it exposes the SAME synchronous
+// prepare/get/all/run/exec surface as node:sqlite, so not one of the 116 call sites in this
+// codebase has to become async. Set TURSO_DATABASE_URL (and TURSO_AUTH_TOKEN for a remote
+// database) to switch; unset, nothing changes.
+const TURSO_URL = process.env.TURSO_DATABASE_URL;
+
+function openConnection() {
+  if (!TURSO_URL) {
+    const { DatabaseSync } = require("node:sqlite");
+    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+    return new DatabaseSync(DB_PATH);
+  }
+  // Deliberately required lazily — a local run must not need the dependency installed at all.
+  const Database = require("libsql");
+  return new Database(TURSO_URL, { authToken: process.env.TURSO_AUTH_TOKEN });
+}
 
 // One-off, additive migrations for databases created before a schema change. CREATE TABLE IF
 // NOT EXISTS never retrofits a column onto a table that already exists, so a genuinely new
@@ -36,12 +57,15 @@ function migrate(db) {
 }
 
 function openDb() {
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  const db = new DatabaseSync(DB_PATH);
+  const db = openConnection();
   db.exec("PRAGMA foreign_keys = ON;");
-  migrate(db);
-  const schema = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
-  db.exec(schema);
+  // A hosted database is served READ-ONLY: the schema and every migration were already applied
+  // on the machine that built the snapshot. Running them again from a serverless handler would
+  // mean concurrent DDL on every cold start, for no benefit.
+  if (!TURSO_URL) {
+    migrate(db);
+    db.exec(fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8"));
+  }
   return db;
 }
 
@@ -49,4 +73,4 @@ function newId() {
   return crypto.randomUUID();
 }
 
-module.exports = { openDb, newId, DB_PATH };
+module.exports = { openDb, newId, DB_PATH, isHosted: Boolean(TURSO_URL) };

@@ -20,12 +20,10 @@
 // decided per model-year, and says how much agreement is behind the headline.
 "use strict";
 
-const path = require("path");
-const { DatabaseSync } = require("node:sqlite");
-
-function openDb() {
-  return new DatabaseSync(path.join(__dirname, "..", "data", "driveindex.sqlite"));
-}
+// Opened through db/client.js rather than reaching for the file directly, so this follows the
+// same local-file / hosted-libSQL switch the rest of the API uses. Opening the path itself
+// would work locally and then fail the moment the API is deployed without the file.
+const { openDb } = require("../db/client");
 
 // A model group's signal is the one carrying the most SALES, not the most model-years — a
 // verdict backed by 200 sales should outrank three thin years that happen to agree.
