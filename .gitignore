@@ -27,6 +27,10 @@ storage/
 .claude/
 .playwright-mcp/
 
+# Ad-hoc check scripts written against the live database while debugging. Working files, not
+# source: they hardcode absolute paths and row ids that only mean anything on one machine.
+scratchpad/
+
 *.log
 .DS_Store
 Thumbs.db

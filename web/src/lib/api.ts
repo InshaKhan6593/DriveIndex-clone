@@ -73,6 +73,16 @@ export type CarDetail = {
   signal: string | null;
   confidence: number | null;
   annualReturn: number | null;
+  // Where the number came from. `scope` is 'own' when this exact model-year had enough of its
+  // own sales; otherwise the figure is borrowed from the model line (year ±2) and `note` is a
+  // ready-to-render sentence saying so. Never null-gated by tier — see api/serialize.js.
+  valuationBasis: {
+    scope: "own" | "own-price/window-trend" | "model-window";
+    fromYear: number | null;
+    toYear: number | null;
+    salesInScope: number | null;
+    note: string | null;
+  } | null;
   projections: {
     forecast1y: number | null; forecast3y: number | null; forecast5y: number | null;
     bear3y: number | null; bull3y: number | null; bear5y: number | null; bull5y: number | null;

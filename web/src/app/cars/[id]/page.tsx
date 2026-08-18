@@ -74,6 +74,14 @@ export default async function CarDetailPage({ params }: { params: Promise<{ id: 
                 </div>
               )}
             </div>
+
+            {/* WHERE THE NUMBER CAME FROM. 91.1% of cars have one or two sales in existence, so a
+                model-year that cannot speak for itself is valued from its model line (year ±2).
+                Showing a borrowed figure as though the car earned it would be the dishonest part —
+                this is the line that makes the fallback legitimate rather than merely bigger. */}
+            {car.valuationBasis?.note && (
+              <p className="mt-2 text-xs text-muted-foreground leading-snug">{car.valuationBasis.note}</p>
+            )}
           </div>
         </div>
 

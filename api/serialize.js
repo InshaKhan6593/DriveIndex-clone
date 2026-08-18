@@ -78,6 +78,28 @@ function serializeCarDetail(car, valuation, sales, tier, listings = [], fallback
     medianPrice: valuation?.median_price ?? null,
     retainedValue: valuation?.retained_value ?? null,
 
+    // WHERE THIS NUMBER CAME FROM. 91.1% of cars have one or two sales in existence, so a
+    // model-year that cannot speak for itself is valued from its model line instead (year ±2,
+    // see jobs/nightly-compute.js). That is only defensible if it is VISIBLE: a reader must be
+    // able to tell "47 sales of this exact car" from "47 sales of 1963-1967, this year had two".
+    // Never gated by tier — provenance is not a paid feature, it is what makes the number
+    // honest, and hiding it would leave free users with a borrowed figure they cannot question.
+    valuationBasis: valuation?.signal_scope
+      ? {
+          scope: valuation.signal_scope, // 'own' | 'own-price/window-trend' | 'model-window'
+          fromYear: valuation.scope_from ?? null,
+          toYear: valuation.scope_to ?? null,
+          salesInScope: valuation.scope_n ?? null,
+          // A plain sentence the UI can render as-is rather than re-deriving the wording.
+          note:
+            valuation.signal_scope === "own"
+              ? null
+              : valuation.signal_scope === "own-price/window-trend"
+                ? `Price from this car's own sales; trend from ${valuation.scope_from}–${valuation.scope_to} (${valuation.scope_n} sales)`
+                : `Based on ${valuation.scope_from}–${valuation.scope_to} (${valuation.scope_n} sales) — too few sales of this exact year`,
+        }
+      : null,
+
     // Pro tier and above
     signal: tierAtLeast(tier, "pro") ? valuation?.signal ?? null : null,
     confidence: tierAtLeast(tier, "pro") ? valuation?.confidence ?? null : null,
