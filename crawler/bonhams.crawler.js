@@ -24,10 +24,32 @@
 // Walked in descending ID order so recent sales — the ones that actually move a price curve —
 // land first, and an interrupted run has still collected the most valuable part.
 //
+// ── PAGINATION: THE FIRST 48 LOTS ARE NOT THE AUCTION ─────────────────────────────────────
+// The auction page server-renders only 48 lots regardless of size, and the original version of
+// this crawler read just that. Measured cost: of 113 auctions classified as cars, 67 had
+// produced ZERO records — their cars sat entirely past lot 48. Goodwood 2023 (id 27997) holds
+// 241 lots of which 79 are cars, and not one of them is in the first 48; it was logged as
+// "0 car lots kept" and written off. Remaining pages now come from the Next.js data route
+// (see lotPageUrl in bonhams-adapt.js), and lotData.facets tells us the auction-wide car count
+// up front, so paging stops the moment every car is in hand.
+//
 // ── STATE ─────────────────────────────────────────────────────────────────────────────────
-// Per auction id, recording WHY an id was finished: "cars" (harvested) or "other" (a different
-// department). Re-running never re-fetches a known non-car auction, which is what keeps the
-// 11k enumeration a one-time cost rather than a repeated one.
+// Per auction id, recording WHY an id was finished:
+//   "other"    a different department
+//   "gone"     404
+//   "offsite"  redirects to a Bonhams partner house on its own domain (see onBonhams below)
+//   {k:"cars", lots, hits, cars, carsExpected, pages}   harvested
+//   {k:"err", tries}                                    network failure, retried up to MAX_TRIES
+// Re-running never re-fetches a known non-car auction, which is what keeps the 11k enumeration
+// a one-time cost rather than a repeated one.
+//
+// The object form exists so INCOMPLETENESS IS VISIBLE IN THE STATE FILE. A bare "cars" string
+// records that an auction was visited but not how much of it was read, which is precisely how
+// the truncation above stayed invisible across several runs. An entry that did not reach its own
+// car count is re-queued automatically on the next run.
+//
+// Repairs are visited BEFORE unexplored ids: a re-queued entry is a known car auction with known
+// missing lots, whereas an unvisited id turns out to be non-car about 93% of the time.
 //
 // Usage:
 //   node crawler/bonhams.crawler.js            # resume, default budget
@@ -36,7 +58,9 @@
 
 const fs = require("fs");
 const path = require("path");
-const { adaptLot, parseAuctionPage, auctionHasCars, DEPT_CARS } = require("./bonhams-adapt");
+const {
+  adaptLot, parseNextData, parseLotPage, auctionHasCars, carLotCount, lotPageUrl, PAGE_SIZE,
+} = require("./bonhams-adapt");
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const HEADERS = { "User-Agent": UA, Accept: "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.9" };
@@ -54,13 +78,32 @@ const STATE = path.join(__dirname, "..", "samples", "bonhams.state.json");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const loadJson = (f, d) => { try { return JSON.parse(fs.readFileSync(f, "utf8")); } catch { return d; } };
 
+// Bonhams operates partner houses on their own domains: sitemap-sale.xml ids resolve, via two
+// 308s, to bruun-rasmussen.dk and bukowskis.com — art, design and watch sales, never cars.
+// bruun-rasmussen.dk is unreachable from here and bukowskis.com answers 403, so following those
+// redirects produced 55 "http0" and 17 "http403" entries that read like transient faults and
+// were retried forever. Redirects are therefore followed BY HAND: the moment a hop leaves
+// bonhams.com the id is a partner sale and gets a terminal answer, before the dead request is
+// ever made.
+const onBonhams = (u) => { try { return new URL(u).hostname.endsWith("bonhams.com"); } catch { return false; } };
+
 async function fetchText(url) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(url, { headers: HEADERS, redirect: "follow", signal: AbortSignal.timeout(30000) });
-      if (res.status === 429 || res.status >= 500) { await sleep(10000 * (attempt + 1)); continue; }
-      if (res.status !== 200) return { http: res.status, text: null };
-      return { http: 200, text: await res.text() };
+      let hop = url;
+      for (let redirects = 0; redirects < 6; redirects++) {
+        const res = await fetch(hop, { headers: HEADERS, redirect: "manual", signal: AbortSignal.timeout(30000) });
+        const loc = res.headers.get("location");
+        if (loc) {
+          hop = new URL(loc, hop).href;
+          if (!onBonhams(hop)) return { http: 200, text: null, offsite: hop };
+          continue;
+        }
+        if (res.status === 429 || res.status >= 500) break; // retry the whole chain
+        if (res.status !== 200) return { http: res.status, text: null };
+        return { http: 200, text: await res.text() };
+      }
+      await sleep(10000 * (attempt + 1));
     } catch { await sleep(5000 * (attempt + 1)); }
   }
   return { http: 0, text: null };
@@ -91,24 +134,73 @@ async function run() {
     fs.writeFileSync(STATE, JSON.stringify(state));
   }
 
-  const todo = state.ids.filter((id) => !state.auctions[id]);
-  console.log(`${todo.length} auctions unvisited; visiting up to ${budget} this run\n`);
+  // Terminal outcomes ("other"/"gone"/"offsite"/http4xx/noparse) are never revisited.
+  //
+  // A network error IS retried, but a bounded number of times — the pre-existing "http0"/"http403"
+  // entries were all partner-house redirects that could never succeed, so an unlimited retry rule
+  // would have re-attempted 72 permanently dead ids on every run forever. Bounded retries mean a
+  // genuine blip still heals itself while a permanent fault stops costing budget.
+  const MAX_TRIES = 3;
+  const needsVisit = (e) => {
+    if (e == null) return true;
+    if (typeof e === "string") {
+      // Legacy string states: written before the object form existed, so completeness is unknown.
+      // "http0"/"http403" here are the known-dead partner redirects, now caught earlier as
+      // "offsite"; one more visit reclassifies them properly and they stop coming back.
+      return e === "cars" || e === "http0" || e === "http403" || /^http5/.test(e);
+    }
+    if (e.k === "err") return (e.tries ?? 0) < MAX_TRIES;
+    return e.k === "cars" && (e.lots ?? 0) < (e.hits ?? 0) && (e.cars ?? 0) < (e.carsExpected ?? 0);
+  };
 
-  let visited = 0, carAuctions = 0, added = 0, skipped = 0;
+  // ORDER: repairs before exploration. A re-queued entry is a KNOWN car auction with known
+  // missing lots; an unvisited id is a lottery ticket that comes up non-car ~93% of the time.
+  // Left in plain id order the repairs sit below 8k unvisited ids and effectively never run.
+  const all = state.ids.filter((id) => needsVisit(state.auctions[id]));
+  const repair = all.filter((id) => state.auctions[id] != null);
+  const fresh = all.filter((id) => state.auctions[id] == null); // already newest-first
+  const todo = [...repair, ...fresh];
+  console.log(`${todo.length} auctions to visit (${repair.length} incomplete/retryable FIRST, then ${fresh.length} never seen); budget ${budget}\n`);
+
+  // State was previously flushed only when a CAR auction was found. Since ~93% of ids are some
+  // other department, an interrupted run threw away every classification made since the last car
+  // — up to hundreds of requests that would simply be repeated next time. Checkpoint on a count
+  // instead, so progress survives a kill regardless of what the ids turned out to be.
+  const CHECKPOINT_EVERY = 25;
+  const saveState = () => fs.writeFileSync(STATE, JSON.stringify(state));
+
+  let visited = 0, carAuctions = 0, added = 0, skipped = 0, offsite = 0;
   for (const id of todo) {
     if (visited >= budget) break;
     visited++;
+    if (visited % CHECKPOINT_EVERY === 0) saveState();
 
     const r = await fetchText(AUCTION(id));
+    if (r.offsite) {
+      // Redirected to a partner house (bruun-rasmussen.dk / bukowskis.com). Terminal, and cheap:
+      // we never issue the doomed request to the other domain.
+      state.auctions[id] = "offsite";
+      offsite++;
+      await sleep(DELAY_MS);
+      continue;
+    }
     if (r.http !== 200) {
       // 404 is a normal, expected answer here: sitemap-sale.xml spans every Bonhams division,
-      // and not every id resolves on the cars host.
-      state.auctions[id] = r.http === 404 ? "gone" : `http${r.http}`;
+      // and not every id resolves on the cars host. A 0 means the network failed — countable and
+      // retryable, unlike an answer the server actually gave.
+      if (r.http === 0) {
+        const prev = state.auctions[id];
+        const tries = (prev && typeof prev === "object" && prev.k === "err" ? prev.tries : 0) + 1;
+        state.auctions[id] = { k: "err", tries };
+      } else {
+        state.auctions[id] = r.http === 404 ? "gone" : `http${r.http}`;
+      }
       await sleep(DELAY_MS);
       continue;
     }
 
-    const pp = parseAuctionPage(r.text);
+    const nd = parseNextData(r.text);
+    const pp = nd?.pageProps;
     if (!pp) { state.auctions[id] = "noparse"; await sleep(DELAY_MS); continue; }
 
     if (!auctionHasCars(pp)) {
@@ -119,10 +211,34 @@ async function run() {
       continue;
     }
 
-    const lots = pp?.lotData?.auctionLots ?? [];
-    const nbHits = pp?.lotData?.nbHits ?? lots.length;
+    // Collect page 1, then walk the data route until every car is accounted for. Keyed by lot
+    // id so a re-run (or an overlapping page) cannot double-count.
+    const byId = new Map();
+    for (const l of pp?.lotData?.auctionLots ?? []) byId.set(l.id, l);
+
+    const nbHits = pp?.lotData?.nbHits ?? byId.size;
+    const carsExpected = carLotCount(pp);
+    const slug = nd?.query?.auctionName;
+    const countCars = () => [...byId.values()].filter((l) => l?.department?.code === "MOT-CAR").length;
+
+    let pages = 1;
+    const lastPage = Math.ceil(nbHits / PAGE_SIZE);
+    if (nd?.buildId && slug) {
+      for (let p = 2; p <= lastPage; p++) {
+        // Every car already in hand — the rest of this auction is someone else's department.
+        if (carsExpected != null && countCars() >= carsExpected) break;
+        await sleep(DELAY_MS);
+        const pr = await fetchText(lotPageUrl(nd.buildId, id, slug, p));
+        if (pr.http !== 200 || !pr.text) break;
+        const more = parseLotPage(pr.text);
+        if (!more || !more.length) break;
+        for (const l of more) byId.set(l.id, l);
+        pages++;
+      }
+    }
+
     let got = 0;
-    for (const lot of lots) {
+    for (const lot of byId.values()) {
       const out = adaptLot(lot, id);
       if (out.kind === "sale") {
         const k = `${out.record.source}|${out.record.source_lot_id}`;
@@ -133,18 +249,23 @@ async function run() {
     }
 
     carAuctions++;
+    const carsFound = countCars();
     const name = pp?.auction?.dates?.start?.[0]?.date?.datetime?.slice(0, 10) ?? "?";
-    console.log(`CARS  ${String(id).padEnd(6)} ${name}  ${String(got).padStart(4)} car lots kept  (${lots.length}/${nbHits} lots on page 1)`);
+    const short = carsExpected != null && carsFound < carsExpected ? `  SHORT ${carsFound}/${carsExpected} cars` : "";
+    console.log(
+      `CARS  ${String(id).padEnd(6)} ${name}  ${String(got).padStart(4)} kept  ` +
+      `(${byId.size}/${nbHits} lots, ${pages}p, ${carsFound} car lots)${short}`
+    );
 
-    state.auctions[id] = "cars";
+    state.auctions[id] = { k: "cars", lots: byId.size, hits: nbHits, cars: carsFound, carsExpected, pages };
     fs.mkdirSync(path.dirname(OUT), { recursive: true });
     fs.writeFileSync(OUT, JSON.stringify([...sales.values()], null, 1));
-    fs.writeFileSync(STATE, JSON.stringify(state));
+    saveState();
     await sleep(DELAY_MS);
   }
 
-  fs.writeFileSync(STATE, JSON.stringify(state));
-  const remaining = state.ids.filter((id) => !state.auctions[id]).length;
+  saveState();
+  const remaining = state.ids.filter((id) => needsVisit(state.auctions[id])).length;
   console.log(`\nvisited ${visited} auctions: ${carAuctions} had cars`);
   console.log(`${sales.size} sales (+${sales.size - startCount} this run), ${skipped} non-car/unconcluded lots skipped`);
   console.log(`${remaining} auctions still unvisited`);
