@@ -9,7 +9,7 @@ const { openDb, newId } = require("../db/client");
 const { resolveCarV2 } = require("../resolve/resolve-car-v2");
 const { standingDecision } = require("../resolve/review-decisions");
 const { classify, buildCorpusStats, structuralVerdict } = require("../resolve/evidence");
-const { parseTitle } = require("../resolve/resolve-car-v2");
+const { extractYear, parseTitle } = require("../resolve/resolve-car-v2");
 const { MAKE_ALIASES } = require("../resolve/vocab");
 const { queueForReview, recordRejection, recordDuplicate } = require("../resolve/resolve-car");
 const { normalizeVin, duplicateScore, DUPLICATE_THRESHOLD, SOURCE_TRUST, daysApart } = require("../dedup/dedup");
@@ -124,7 +124,13 @@ function ingestRecord(db, rec, stats) {
   const verdict = classify({
     title: rec.title, parsed: preParse, knownMake,
     stats: stats.corpusStats || { makeFreq: new Map(), makeSources: new Map(), tokenFreq: new Map(), totalSales: 0 },
-    hasYear: Boolean(preParse.ok ? preParse.year : (String(rec.url||"").match(/\/(1[89]\d{2}|20[0-4]\d)-/))),
+    // When parseTitle bails early (an out-of-scope verdict returns before year extraction) it
+    // leaves `year` undefined — that means "not parsed", NOT "no year present". This previously
+    // fell back to checking the URL alone, so "1969 Merlyn Mk 11A Formula Ford" was recorded as
+    // rejected for "no model year in title or URL" with 1969 sitting in plain sight. The rule
+    // claims to test the title OR the url, so it must actually test both.
+    hasYear: Boolean(preParse.ok ? preParse.year
+      : (extractYear(rec.title) || String(rec.url || "").match(/\/(1[89]\d{2}|20[0-4]\d)-/))),
   });
   if (verdict.action === "reject") {
     stats.structuralRejects.push({ title: rec.title, reason: verdict.reason });

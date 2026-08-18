@@ -14,7 +14,7 @@
 const fs = require("fs");
 const path = require("path");
 const { openDb, newId } = require("../db/client");
-const { resolveCarV2, parseTitle } = require("../resolve/resolve-car-v2");
+const { resolveCarV2, parseTitle, extractYear } = require("../resolve/resolve-car-v2");
 const { classify, buildCorpusStats, structuralVerdict } = require("../resolve/evidence");
 const { MAKE_ALIASES } = require("../resolve/vocab");
 const { queueForReview, recordRejection } = require("../resolve/resolve-car");
@@ -57,7 +57,10 @@ function ingestListingRecord(db, rec, stats) {
   const verdict = classify({
     title: rec.title, parsed: preParse, knownMake,
     stats: stats.corpusStats || { makeFreq: new Map(), makeSources: new Map(), tokenFreq: new Map(), totalSales: 0 },
-    hasYear: Boolean(preParse.ok ? preParse.year : (String(rec.url || "").match(/\/(1[89]\d{2}|20[0-4]\d)\//))),
+    // See the note in ingest/ingest.js: a failed parse means "not parsed", not "no year",
+    // so the title must be tested too or the recorded rejection reason is false.
+    hasYear: Boolean(preParse.ok ? preParse.year
+      : (extractYear(rec.title) || String(rec.url || "").match(/\/(1[89]\d{2}|20[0-4]\d)\//))),
   });
   if (verdict.action === "reject") {
     stats.structuralRejects.push({ title: rec.title, reason: verdict.reason });

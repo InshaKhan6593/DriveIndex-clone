@@ -711,4 +711,4 @@ function resolveCarV2(db, saleRecord) {
   return { status: "matched", carId: outcome.carId, created: outcome.created, decision: outcome.decision, parsed, yearConflict };
 }
 
-module.exports = { parseTitle, findOrCreateCar, resolveCarV2, canonicalModelKey, stripNoisePrefixes, compareModelKeys };
+module.exports = { parseTitle, findOrCreateCar, resolveCarV2, canonicalModelKey, stripNoisePrefixes, compareModelKeys, extractYear };
