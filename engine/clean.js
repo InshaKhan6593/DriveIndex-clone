@@ -9,13 +9,35 @@ const { mileageAdjust } = require("./mileage");
 //   h = g.filter(e => !e.isOutlier && !e.carfaxDamage && !e.nonUsSale && !e.reserveNotMet)
 // plus the currency guard from the other call site.
 //
-// ⚠️ THE CURRENCY GUARD IS THEIR DEFECT #1, REPRODUCED HERE ONLY BEHIND A FLAG. They ingest
-// 10 currencies and compute on 1, silently dropping every EUR/GBP/CHF/JPY sale from the
-// maths while still DISPLAYING it. For international sources (Bonhams, Collecting Cars,
-// RM's Zurich/London/Munich sales) that discards a large share of the corpus. The fix is
-// price_usd populated at ingest using the FX rate on sold_at — then this predicate should
-// gate on price_usd being present, NOT on currency === 'USD'.
-function isClean(sale, { dropNonUsd = true } = {}) {
+// ⚠️ THE CURRENCY GUARD WAS THEIR DEFECT #1. They ingest 10 currencies and compute on 1,
+// silently dropping every EUR/GBP/CHF/JPY sale from the maths while still DISPLAYING it.
+//
+// FIXED 2026-08-18, as the comment that stood here specified: price_usd is now populated at
+// ingest from the ECB reference rate FOR THE DAY THE LOT SOLD (fx/convert.js), so the test is
+// "can this price be compared at all", i.e. is price_usd present — not "is it already dollars".
+// `dropNonUsd` therefore defaults to false; passing true restores the old currency test for
+// conformance testing against their bundle.
+//
+// THE TWO GATES ARE INDEPENDENT, AND ONLY THE CURRENCY ONE WAS A DEFECT.
+//   price_usd    — "is this price comparable at all"   (fixed above)
+//   non_us_sale  — "did it sell in the US"             (deliberately kept, see below)
+//
+// DECISION 2026-08-18: this stays a US-MARKET INDEX, matching their [V] predicate. A Paris or
+// London result is a different buyer pool, tax treatment and fee structure, so it is excluded
+// on purpose rather than by accident. Measured cost of that choice, so it is an informed one:
+// 8,193 priced, comparable, real sales sit out (bon 3,888, bat 3,158, rms 900, good 145,
+// broadarrow 102), 433 cars would otherwise cross 3+ clean sales, and 4,237 cars that report
+// "insufficient" today do have priced overseas sales behind them.
+//
+// Note the flag is NOT a currency proxy — 5,606 USD-denominated sales are flagged non-US from
+// real country data, and Bonhams alone has 33 lots sold in the UAE in dollars. Adapters that
+// still derive it from currency alone (broadarrow, gooding, sms) are wrong in both directions
+// and should read a country field where the source provides one, as bat and bon now do.
+//
+// Fixing the currency half is still what makes those overseas prices *correct* wherever they
+// are shown or compared — the sale list, cross-currency deal scoring, and any future global
+// basis — rather than displayed as evidence and silently ignored, which was the actual defect.
+function isClean(sale, { dropNonUsd = false } = {}) {
   const base = !sale.is_outlier
     && !sale.carfax_damage
     && !sale.non_us_sale

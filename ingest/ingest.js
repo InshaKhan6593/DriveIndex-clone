@@ -12,6 +12,15 @@ const { classify, buildCorpusStats, structuralVerdict } = require("../resolve/ev
 const { extractYear, parseTitle } = require("../resolve/resolve-car-v2");
 const { MAKE_ALIASES } = require("../resolve/vocab");
 const { queueForReview, recordRejection, recordDuplicate } = require("../resolve/resolve-car");
+const { toUsd } = require("../fx/convert");
+
+// price_usd is what the whole engine actually computes on — engine/clean.js drops any sale
+// without it. Filling it only for currency === "USD" is what excluded 7,468 non-USD sold lots
+// (60.8% of Bonhams, 28.3% of RM Sotheby's). Converted at the ECB rate FOR THE DAY IT SOLD,
+// never today's: see fx/fetch-ecb-rates.js. Returns null when no rate applies, and null keeps
+// the sale excluded exactly as before rather than inventing a number.
+const usdFor = (rec) =>
+  rec.price_usd ?? toUsd(rec.price, rec.currency, rec.sold_at);
 const { normalizeVin, duplicateScore, DUPLICATE_THRESHOLD, SOURCE_TRUST, daysApart } = require("../dedup/dedup");
 
 const SCRAPED_DIR = path.join(__dirname, "..", "samples", "scraped");
@@ -73,7 +82,7 @@ function ingestRecord(db, rec, stats) {
   if (rec.source_lot_id) {
     const existing = db.prepare("SELECT car_id FROM sale WHERE source = ? AND source_lot_id = ?").get(rec.source, rec.source_lot_id);
     if (existing) {
-      insertSale(db, existing.car_id, { ...rec, price_usd: rec.price_usd ?? (rec.currency === "USD" ? rec.price : null) });
+      insertSale(db, existing.car_id, { ...rec, price_usd: usdFor(rec) });
       stats.alreadyIngested = (stats.alreadyIngested || 0) + 1;
       return;
     }
@@ -174,7 +183,7 @@ function ingestRecord(db, rec, stats) {
   if (!resolution.created) stats.attachedToExistingCar++;
 
   const carId = resolution.carId;
-  const recWithUsd = { ...rec, price_usd: rec.price_usd ?? (rec.currency === "USD" ? rec.price : null) };
+  const recWithUsd = { ...rec, price_usd: usdFor(rec) };
 
   // Cross-source dedup: score this record against every sale already on file for this
   // car_id (dedup/dedup.js §4.2). At current real data volume this rarely fires — most
