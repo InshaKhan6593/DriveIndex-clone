@@ -61,9 +61,17 @@ export default async function CarDetailPage({ params }: { params: Promise<{ id: 
                 <div className="text-3xl font-semibold tabular-nums">
                   {car.currentValue ? `$${car.currentValue.toLocaleString()}` : "—"}
                 </div>
+                {/* The raw fitted slope. When shrinkage has already discounted it (too few
+                    degrees of freedom) the engine's own ranking layer does not believe this
+                    number — a 2015 Audi S5 published "+197.8%/yr" from 3 sales against a
+                    trend_score of -4.8%. Stating that as measured fact is the misleading part,
+                    so an unreliable fit is labelled rather than printed bare. */}
                 {car.annualReturn != null && (
                   <div className="text-sm text-muted-foreground tabular-nums">
                     {car.annualReturn >= 0 ? "+" : ""}{(car.annualReturn * 100).toFixed(1)}%/yr
+                    {car.trendReliable === false && (
+                      <span className="ml-1 normal-nums opacity-70">· indicative only, too few sales to confirm</span>
+                    )}
                   </div>
                 )}
               </div>

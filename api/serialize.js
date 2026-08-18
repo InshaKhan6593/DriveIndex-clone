@@ -51,6 +51,12 @@ function serializeListing(listing, tier) {
   return { ...base, price: listing.price, currency: listing.currency, source: listing.source, url: listing.url };
 }
 
+// How much of the raw slope shrinkage must leave intact before the headline trend is presented
+// as measured rather than indicative. Measured across 21,869 published fits: 7,952 keep at least
+// half their slope, 13,917 do not — the latter are mostly 3-10 sale fits, which is exactly the
+// population that produced the +197%/yr artifacts.
+const TREND_AGREEMENT_FLOOR = 0.5;
+
 function serializeCarDetail(car, valuation, sales, tier, listings = [], fallbackImage = null) {
   const sortedSales = [...sales].sort((a, b) => new Date(b.sold_at) - new Date(a.sold_at));
   const visibleSales = tierAtLeast(tier, "pro") ? sortedSales : sortedSales.slice(0, 5);
@@ -104,6 +110,24 @@ function serializeCarDetail(car, valuation, sales, tier, listings = [], fallback
     signal: tierAtLeast(tier, "pro") ? valuation?.signal ?? null : null,
     confidence: tierAtLeast(tier, "pro") ? valuation?.confidence ?? null : null,
     annualReturn: tierAtLeast(tier, "pro") ? valuation?.annual_return ?? null : null,
+
+    // DOES THE ENGINE BELIEVE ITS OWN HEADLINE?
+    //
+    // annual_return is the raw fitted slope and is what gets DISPLAYED; trend_score is that
+    // slope shrunk toward the market mean by degrees of freedom, and is what leaderboards
+    // ORDER by (engine/ranking.js). Ranking on the raw number puts 3-sale artifacts on top,
+    // which is why the two exist separately — but the detail page was printing the raw number
+    // with no hint that the ranking layer had already discounted it. Measured: a 2015 Audi S5
+    // published "+197.8%/yr" from 3 sales while its trend_score sat at -4.8%.
+    //
+    // Confidence does NOT separate these — median |annual_return| RISES across confidence
+    // bands (5.4% -> 11.4%), so gating on it would suppress exactly the wrong rows. Shrinkage
+    // does: when it removes more than half the slope, the fit has too few degrees of freedom to
+    // be trusted, and the UI should not state it as measured fact.
+    trendReliable:
+      !tierAtLeast(tier, "pro") || valuation?.annual_return == null || valuation?.trend_score == null
+        ? null
+        : Math.abs(valuation.trend_score / valuation.annual_return) >= TREND_AGREEMENT_FLOOR,
     projections: tierAtLeast(tier, "pro") ? {
       forecast1y: valuation?.forecast_1y ?? null,
       forecast3y: valuation?.forecast_3y ?? null,

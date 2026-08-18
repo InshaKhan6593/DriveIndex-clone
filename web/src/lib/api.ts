@@ -73,6 +73,10 @@ export type CarDetail = {
   signal: string | null;
   confidence: number | null;
   annualReturn: number | null;
+  // Whether shrinkage left the fitted slope substantially intact. false means the engine's own
+  // ranking layer has discounted this trend (too few degrees of freedom), so the headline
+  // percentage must not be presented as measured fact. See api/serialize.js.
+  trendReliable: boolean | null;
   // Where the number came from. `scope` is 'own' when this exact model-year had enough of its
   // own sales; otherwise the figure is borrowed from the model line (year ±2) and `note` is a
   // ready-to-render sentence saying so. Never null-gated by tier — see api/serialize.js.
