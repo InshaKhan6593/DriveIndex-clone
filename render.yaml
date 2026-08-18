@@ -1,0 +1,33 @@
+# Render blueprint for the READ-ONLY API.
+#
+# Only the API is deployed. Crawling, ingest, compute and validation all run on the machine
+# that holds data/driveindex.sqlite; production serves a snapshot built by db/export-serving.js
+# and uploaded to Turso. Nothing here scrapes anything.
+#
+# Why Render rather than a serverless host: `libsql` is a NATIVE module, and this runs it in an
+# ordinary long-lived Node process where that is uncomplicated. It also keeps one warm
+# connection instead of opening a database handle per request on every cold start.
+#
+# Deploy: Render dashboard -> New -> Blueprint -> pick this repo. Then set the two secrets
+# below (marked sync:false, so they are never committed).
+services:
+  - type: web
+    name: driveindex-api
+    runtime: node
+    plan: free
+    region: oregon
+    # `npm ci --omit=dev` deliberately: playwright and crawlee are devDependencies because they
+    # belong to the crawlers, not the API. Installing them here would pull down browser binaries
+    # on every deploy for code this service never loads.
+    buildCommand: npm ci --omit=dev
+    startCommand: node api/server.js
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22.20.0"
+      # Presence of this is what switches db/client.js from the local file to the hosted
+      # database. Without it the API would look for a 249MB file that is not in the repo.
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false

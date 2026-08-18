@@ -14,7 +14,7 @@
 
 const express = require("express");
 const cors = require("cors");
-const { openDb } = require("../db/client");
+const { openDb, isHosted } = require("../db/client");
 const { serializeCarSummary, serializeCarDetail, TIERS } = require("./serialize");
 const { mileageAdjust } = require("../engine/mileage");
 const { judgeAsk, dealScore, plausibleMileage } = require("../engine/ranking");
@@ -332,6 +332,22 @@ app.get("/api/stats/public", (req, res) => {
   const queued = db.prepare("SELECT COUNT(*) n FROM car_resolution_queue WHERE status='pending'").get().n;
   // Read these live, never hardcode — ground truth defect #4 is exactly this drifting.
   res.json({ sales, cars, sources, totalValue, pendingResolution: queued });
+});
+
+// Liveness probe for the host. Deliberately touches the DATABASE rather than just returning
+// 200: a process that is up but cannot reach its database is not healthy, and on a hosted
+// libSQL connection that is the failure that actually happens (bad token, wrong URL, database
+// deleted). Render restarts the service when this stops answering — see render.yaml.
+app.get("/api/health", (req, res) => {
+  try {
+    // Reuses the module-level connection on purpose. Opening a new one per probe would leak a
+    // handle on every poll, and the question being asked is whether THIS process can still
+    // serve — not whether a fresh connection could be made.
+    const { n } = db.prepare("SELECT COUNT(*) n FROM car").get();
+    res.json({ ok: true, cars: n, hosted: isHosted });
+  } catch (err) {
+    res.status(503).json({ ok: false, error: String(err.message || err) });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
