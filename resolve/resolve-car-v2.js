@@ -45,7 +45,41 @@ function stripNoisePrefixes(title) {
   return t;
 }
 
+// Where a title stops describing the MODEL and starts identifying the individual CAR.
+//
+// Classic-auction houses append the chassis/engine/VIN of the specific vehicle:
+//   "1969 Porsche 911E Coupe Chassis no. 119200650"
+//   "2006 Mercedes-Benz SL500 VIN. WDBSK75F56F107641"
+//   "1961 Fiat OSCA 1500S Spider Chassis no. 118S 006560 Engine no. 118.000 002763"
+//
+// Those numbers are unique per car, so leaving them in the title puts them in `model_key` and
+// every single lot becomes its own model. Measured on Bonhams: 92.9% of titles carry such a
+// clause, and 7,367 of its 7,378 cars had exactly one sale and a signal of "insufficient" —
+// 7,731 sales that could not contribute to any price curve. Stripping turns
+// "chassis fj40 fj40940286 no." back into "fj40", which matches every other FJ40 in the corpus.
+//
+// The whole remainder is cut, not just the number: nothing after "Chassis no." is model text.
+// `\bengine\b` deliberately does not match "Engineering" ("1972 March Engineering 722"), and the
+// keyword must be followed by no/number so a model containing "Body" or "Transmission" survives.
+const ID_CLAUSE = [
+  /\s*\b(?:chassis|engine|frame|body|gearbox|transmission)\s+(?:nos?|numbers?)\b\.?/i,
+  /\s*\bvin\b\.?\s*(?=[A-Za-z0-9]{5,})/i,
+];
+
+function stripIdentifierClause(title) {
+  let cut = title.length;
+  for (const re of ID_CLAUSE) {
+    const m = title.match(re);
+    if (m && m.index < cut) cut = m.index;
+  }
+  return cut === title.length ? title : title.slice(0, cut).trim();
+}
+
 function extractYear(text) {
+  // A missing title is a normal input, not a programming error: records harvested by the
+  // superseded Bonhams scraper carry title:null (lot 31959-1 and friends), and calling this on
+  // one threw straight out of ingest. "No text" simply means "no year found".
+  if (typeof text !== "string" || !text) return null;
   // "1963.5 Ford Falcon" -> 1963 ; "ca.1945 T-34" handled by prefix strip first
   const m = text.match(/\b(1[89]\d{2}|20[0-4]\d)(?:\.\d)?\b/);
   if (!m) return null;
@@ -115,12 +149,24 @@ function inferMakeFromPosition(afterYear) {
   return { make: titleCase, matchedKey: titleCase.toLowerCase(), index: 0, length: first.length, inferred: true };
 }
 
+// Compiled once. extractMake now has to consider EVERY alias rather than returning on the first
+// hit, and rebuilding ~500 RegExps per title made that cost real on a 60k-record ingest.
+// word-boundary match so "mg" doesn't fire inside "MGB-something" incorrectly, and "ford"
+// doesn't match inside "Bradford".
+const MAKE_PATTERNS = MAKE_KEYS_LONGEST_FIRST.map((key) => ({
+  key,
+  re: new RegExp(`(^|[^a-z0-9])${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, "i"),
+}));
+
+// Longest alias first, returning on the first hit. This is deliberate and must stay: it is what
+// keeps a specialist marque ahead of its base brand, so "2009 Ford Shelby GT500" indexes as
+// Shelby and "2008 BMW Alpina B7" as Alpina rather than collapsing into Ford and BMW. Measured
+// before changing it: preferring the earliest marque instead would have remapped 3,280 already
+// resolved sales — 1,613 Shelby, 284 Alpina, 203 Saleen, 63 Polestar — merging price curves
+// that are separate on purpose.
 function extractMake(text) {
   const lower = foldDiacritics(text.toLowerCase());
-  for (const key of MAKE_KEYS_LONGEST_FIRST) {
-    // word-boundary match so "mg" doesn't fire inside "MGB-something" incorrectly, and
-    // "ford" doesn't match inside "Bradford"
-    const re = new RegExp(`(^|[^a-z0-9])${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`, "i");
+  for (const { key, re } of MAKE_PATTERNS) {
     const m = lower.match(re);
     if (m) {
       const start = m.index + m[1].length;
@@ -128,6 +174,38 @@ function extractMake(text) {
     }
   }
   return null;
+}
+
+/**
+ * The EARLIEST-positioned marque in the text. A fallback, never the default.
+ *
+ * Sometimes the longest-alias rule above picks a token that is really a MODEL name colliding
+ * with a make alias — "1957 Nash Metropolitan" picks Metropolitan, "1994 Land Rover Range Rover"
+ * picks Range Rover, "1974 Jensen Healey" picks Healey, "2013 Fiat 500 Abarth" picks Abarth.
+ * The model is whatever FOLLOWS the make, so in each of those the remainder is empty and the
+ * record dies with "no model text after make" — 534 such rows in the queue.
+ *
+ * Emptiness is the signal that separates the two cases, and it is why this is only consulted
+ * when the primary pick consumes the whole string. A real specialist marque leaves model text
+ * behind it ("Ford Shelby GT500" -> "GT500"), so those never reach this path and keep their
+ * marque. Auction titles read "<year> <make> <model…>" and the caller has already stripped
+ * everything up to and including the year, so engine-donor prefixes ("Subaru-Powered 1990
+ * Volkswagen Vanagon") are not in this text and position is safe to trust here.
+ */
+function earliestMake(text) {
+  const lower = foldDiacritics(text.toLowerCase());
+  let best = null;
+  for (const { key, re } of MAKE_PATTERNS) {
+    const m = lower.match(re);
+    if (!m) continue;
+    const start = m.index + m[1].length;
+    // Patterns are longest-first, so at an equal index the longer alias is already held and
+    // "aston martin" still beats "aston".
+    if (best && start >= best.index) continue;
+    best = { make: MAKE_ALIASES.get(key), matchedKey: key, index: start, length: key.length };
+    if (start === 0) break; // nothing can start earlier
+  }
+  return best;
 }
 
 function extractBodyStyle(tokens) {
@@ -299,7 +377,8 @@ function parseTitle(rawTitle, ctx = {}) {
   const outOfScope = checkOutOfScope(title);
   if (outOfScope) return { ok: false, reason: outOfScope, needsReview: true };
 
-  const stripped = stripNoisePrefixes(title);
+  // Prefixes first ("28k-Mile"), then the trailing chassis/VIN clause — see stripIdentifierClause.
+  const stripped = stripIdentifierClause(stripNoisePrefixes(title));
 
   let yearInfo = extractYear(stripped);
   let afterYear;
@@ -365,6 +444,25 @@ function parseTitle(rawTitle, ctx = {}) {
 
   // Everything after the make is candidate model text.
   let rest = afterYear.slice(makeInfo.index + makeInfo.length).trim();
+
+  // Nothing left after the make means the make match probably swallowed the MODEL — "Nash
+  // Metropolitan", "Land Rover Range Rover", "Fiat 500 Abarth". Re-take the marque from the
+  // earliest position instead, which puts the swallowed text back into the model. Only done
+  // when the remainder is empty, so a genuine specialist marque ("Ford Shelby GT500" leaves
+  // "GT500") is never demoted to its base brand. See earliestMake.
+  if (!rest && !makeInferred) {
+    const earlier = earliestMake(afterYear);
+    if (earlier && earlier.index < makeInfo.index) {
+      const retry = afterYear.slice(earlier.index + earlier.length).trim();
+      if (retry) {
+        if (MOTORCYCLE_MAKES.has(earlier.matchedKey)) {
+          return { ok: false, reason: "motorcycle marque, out of scope", needsReview: true, year: yearInfo.year, make: earlier.make };
+        }
+        makeInfo = earlier;
+        rest = retry;
+      }
+    }
+  }
 
   // Remove transmission and modification words so they don't fragment the model.
   if (transmission) rest = rest.replace(new RegExp(transmission.raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig"), " ");
