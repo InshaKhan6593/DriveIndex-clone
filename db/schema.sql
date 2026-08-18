@@ -71,6 +71,18 @@ CREATE TABLE IF NOT EXISTS car_valuation (
   trend_lcb REAL,
   trend_score REAL,
 
+  -- WHICH SALES THIS NUMBER CAME FROM. 'own' = this exact model-year's sales. 'model-window' =
+  -- pooled from the same make/model/body across year +/- SCOPE_HALF_WIDTH, used ONLY when the
+  -- car's own sales cannot produce a signal at all. Measured: 91.1% of "insufficient" cars have
+  -- one or two sales IN EXISTENCE, so no amount of harvesting reaches them — but 11,558 of them
+  -- sit inside a model line that does have history. Never silently: a pooled number carries its
+  -- scope so the UI can say "based on 1965-1969, 47 sales" instead of implying it is the car's
+  -- own record.
+  signal_scope   TEXT,     -- 'own' | 'model-window'
+  scope_from     INTEGER,  -- first model-year pooled
+  scope_to       INTEGER,  -- last model-year pooled
+  scope_n        INTEGER,  -- clean sales in the pool
+
   forecast_1y INTEGER, forecast_3y INTEGER, forecast_5y INTEGER,
   bear_3y INTEGER, bull_3y INTEGER, bear_5y INTEGER, bull_5y INTEGER,
   projection_confidence REAL,

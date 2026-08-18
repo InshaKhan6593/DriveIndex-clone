@@ -6,6 +6,20 @@
 
 const { openDb, newId } = require("../db/client");
 const { computeValuation } = require("../engine/index");
+
+// How many model-years either side to pool from when a car's own sales cannot produce a signal.
+// Measured trade-off across 64,296 cars (scratchpad/window-test.js):
+//     +/-1   8,213 rescued   median drift 14.4%
+//     +/-2  11,558 rescued   median drift 16.5%   <- chosen
+//     +/-3  13,215 rescued   median drift 17.9%
+//     +/-5  14,891 rescued   median drift 19.1%
+// Drift is how far the pooled median sits from the car's own sales. +/-2 roughly doubles the
+// 12,050 cars that publish today without reaching for the wider, blurrier windows.
+const SCOPE_HALF_WIDTH = Number(process.env.SCOPE_HALF_WIDTH) || 2;
+
+// A valuation borrowed from neighbouring model-years is weaker evidence than one a car earned
+// from its own sales, and must never outrank it in any leaderboard.
+const SCOPE_CONFIDENCE_PENALTY = 0.6;
 const { shrinkToward } = require("../engine/ranking");
 
 function upsertValuation(db, result) {
@@ -21,7 +35,8 @@ function upsertValuation(db, result) {
        liquidity_tier, sales_per_year, days_between_sales, sales_count, outlier_count,
        recent_sales_count, listings_count, data_basis, value_basis,
        segment, buy_hold_sell, buy_hold_sell_copy, liquidity_verdict, liquidity_copy, months_of_supply,
-       trend_se, trend_lcb, trend_score)
+       trend_se, trend_lcb, trend_score,
+       signal_scope, scope_from, scope_to, scope_n)
      VALUES (@car_id,@computed_at,@current_value,@median_price,@price_low,@price_high,@avg_mileage,
        @retained_value,@signal,@confidence,@annual_return,@recent_return,@volatility,
        @forecast_1y,@forecast_3y,@forecast_5y,@bear_3y,@bull_3y,@bear_5y,@bull_5y,
@@ -32,7 +47,8 @@ function upsertValuation(db, result) {
        @liquidity_tier,@sales_per_year,@days_between_sales,@sales_count,@outlier_count,
        @recent_sales_count,@listings_count,@data_basis,@value_basis,
        @segment,@buy_hold_sell,@buy_hold_sell_copy,@liquidity_verdict,@liquidity_copy,@months_of_supply,
-       @trend_se,@trend_lcb,@trend_score)
+       @trend_se,@trend_lcb,@trend_score,
+       @signal_scope,@scope_from,@scope_to,@scope_n)
      ON CONFLICT(car_id) DO UPDATE SET
        computed_at=excluded.computed_at, current_value=excluded.current_value,
        median_price=excluded.median_price, price_low=excluded.price_low, price_high=excluded.price_high,
@@ -56,7 +72,9 @@ function upsertValuation(db, result) {
        segment=excluded.segment, buy_hold_sell=excluded.buy_hold_sell,
        buy_hold_sell_copy=excluded.buy_hold_sell_copy, liquidity_verdict=excluded.liquidity_verdict,
        liquidity_copy=excluded.liquidity_copy, months_of_supply=excluded.months_of_supply,
-       trend_se=excluded.trend_se, trend_lcb=excluded.trend_lcb, trend_score=excluded.trend_score`
+       trend_se=excluded.trend_se, trend_lcb=excluded.trend_lcb, trend_score=excluded.trend_score,
+       signal_scope=excluded.signal_scope, scope_from=excluded.scope_from,
+       scope_to=excluded.scope_to, scope_n=excluded.scope_n`
   ).run({
     car_id: result.carId,
     computed_at: result.computedAt,
@@ -114,6 +132,10 @@ function upsertValuation(db, result) {
     trend_se: result.trendSe ?? null,
     trend_lcb: result.trendLcb ?? null,
     trend_score: result.trendScore ?? null,
+    signal_scope: result.signalScope ?? "own",
+    scope_from: result.scopeFrom ?? null,
+    scope_to: result.scopeTo ?? null,
+    scope_n: result.scopeN ?? null,
   });
 }
 
@@ -134,16 +156,91 @@ function runNightlyCompute(db) {
       .all().map((r) => [r.car_id, r.n])
   );
 
+  // MODEL-LINE INDEX for the fallback below: make|model_key|body_type -> year -> sales.
+  // Built once; a per-car query would be ~64k extra round trips.
+  const lineIndex = new Map();
+  {
+    const all = db.prepare(
+      `SELECT s.*, c.year AS _y, c.make AS _mk, c.model_key AS _md, c.body_type AS _b
+       FROM sale s JOIN car c ON c.id = s.car_id`
+    ).all();
+    for (const s of all) {
+      const k = `${s._mk}|${s._md}|${s._b || ""}`;
+      const byYear = lineIndex.get(k) || new Map();
+      const arr = byYear.get(s._y) || [];
+      arr.push(s);
+      byYear.set(s._y, arr);
+      lineIndex.set(k, byYear);
+    }
+  }
+
   // PASS 1 — value every car. Nothing is written yet: the shrinkage in pass 2 needs the
   // market-wide mean trend, which isn't known until every car has been fitted.
+  let widened = 0;
   for (const car of cars) {
     const sales = db.prepare("SELECT * FROM sale WHERE car_id = ?").all(car.id);
     // Was hardcoded 0, so listings_count was 0 on all 54,818 rows and computeLiquidity() has
     // never once seen real supply — months-of-supply and the liquidity verdict were derived
     // from an assumed-empty market.
-    const result = computeValuation(car, sales, listingCounts.get(car.id) ?? 0);
+    const listings = listingCounts.get(car.id) ?? 0;
+    let result = computeValuation(car, sales, listings);
+    result.signalScope = "own";
+
+    // ── FALLBACK: value from the MODEL LINE when this model-year cannot speak for itself ──
+    //
+    // 91.1% of "insufficient" cars have one or two sales IN EXISTENCE — no amount of harvesting
+    // reaches them, because the transactions never happened. Measured on 227k sales: adding 274
+    // new ones moved the signal count by exactly 0, because half of them created new singleton
+    // cars. Breadth cannot fix this; pooling can.
+    //
+    // A window CENTRED on the car, not a fixed 5-year band: a band splits generations at
+    // arbitrary boundaries (1964 and 1965 Mustangs would land in different buckets), whereas a
+    // centred window cannot. Measured at +/-2: 11,558 cars rescued, against 12,050 that publish
+    // on their own today — it roughly doubles coverage.
+    //
+    // The cost is real and is why this never overwrites an "own" verdict: the pooled median sits
+    // a median 16.5% from the car's own sales (p90 62%). So it runs ONLY when the car has no
+    // signal at all, the result is labelled with the exact years and sale count it came from,
+    // and confidence is discounted so a pooled car can never outrank a car with its own history.
+    if (result.signal === "insufficient" && car.model_key) {
+      const byYear = lineIndex.get(`${car.make}|${car.model_key}|${car.body_type || ""}`);
+      if (byYear) {
+        let pool = [];
+        for (let y = car.year - SCOPE_HALF_WIDTH; y <= car.year + SCOPE_HALF_WIDTH; y++) {
+          const a = byYear.get(y);
+          if (a) pool = pool.concat(a);
+        }
+        if (pool.length > sales.length) {
+          const wide = computeValuation(car, pool, listings);
+          if (wide.signal && wide.signal !== "insufficient") {
+            wide.signalScope = "model-window";
+            wide.scopeFrom = car.year - SCOPE_HALF_WIDTH;
+            wide.scopeTo = car.year + SCOPE_HALF_WIDTH;
+            wide.scopeN = pool.length;
+            // A borrowed history is weaker evidence than an owned one, always.
+            wide.confidence = (wide.confidence ?? 0) * SCOPE_CONFIDENCE_PENALTY;
+
+            // BORROW ONLY WHAT IS MISSING. A car can have enough sales to know its PRICE but
+            // still not enough TIME SPAN to show a direction — measured: 2023 Subaru BRZ, 4
+            // sales inside 84 days. Replacing its price with the model line's would discard a
+            // real, better number in favour of a pooled one. So where the car priced itself,
+            // its own price survives and only the trend is taken from the neighbours.
+            if (result.currentValue != null) {
+              for (const k of ["currentValue", "medianPrice", "priceLow", "priceHigh",
+                               "avgMileage", "peakPrice", "fromPeak", "retainedValue"]) {
+                if (result[k] != null) wide[k] = result[k];
+              }
+              wide.signalScope = "own-price/window-trend";
+            }
+            result = wide;
+            widened++;
+          }
+        }
+      }
+    }
     results.push({ car, result });
   }
+  console.log(`valued from the model line (own sales insufficient): ${widened}`);
 
   // PASS 2 — shrink each car's conservative trend toward the population mean and persist.
   // The mean is taken over cars that produced a trustworthy trend at all, so cars the engine

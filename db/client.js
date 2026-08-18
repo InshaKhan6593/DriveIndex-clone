@@ -19,6 +19,11 @@ function migrate(db) {
   for (const col of ["trend_se", "trend_lcb", "trend_score"]) {
     try { db.exec(`ALTER TABLE car_valuation ADD COLUMN ${col} REAL`); } catch { /* already present */ }
   }
+  // Scope of a valuation — see the comment on these columns in schema.sql.
+  try { db.exec("ALTER TABLE car_valuation ADD COLUMN signal_scope TEXT"); } catch { /* already present */ }
+  for (const col of ["scope_from", "scope_to", "scope_n"]) {
+    try { db.exec(`ALTER TABLE car_valuation ADD COLUMN ${col} INTEGER`); } catch { /* already present */ }
+  }
   // ALTER TABLE cannot add a CHECK constraint, so the added column is plain TEXT; the constraint
   // still applies to databases created fresh from schema.sql.
   try {
