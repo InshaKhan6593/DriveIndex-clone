@@ -9,7 +9,7 @@ Probed live 2026-08-15 with `node crawler/probe-all-sources.js`. Machine-readabl
 |---|---|---|---|---|---|---|
 | Bring a Trailer | `bat` | yes | **347** | yes | built | **built — 162,012 sales; 4 large partitions still unstarted (~130k more)** |
 | Cars & Bids | `cab` | yes | **80** | yes | built | **built — 35,609 sales** |
-| Mecum | `mecum` | **robots.txt prohibits data mining "for any commercial purposes"** | **116** | yes | built | **frozen at 7,300 sales — see below; keeps existing data, adds none** |
+| Mecum | `mecum` | **robots.txt requires prior written permission — the operator holds it (2026-08-18)** | **116** | yes | built | **built + scheduled — per-event, sitemap-discovered, page-paginated. 17,878 records from 9 of 184 live events** |
 | RM Sotheby's | `rms` | yes | 17 | no (detail only) | built | **built — 2,676 sales + 17 listings** |
 | Gooding & Company | `good` | yes | 4 | no | **built (2026-08-16)** | **built — 2,030 sales, 41/41 auctions (COMPLETE)** |
 | Broad Arrow Auctions | `broadarrow` | yes | 1 | no (detail only) | **built (2026-08-17)** | **built — 252 sales + 172 listings, 8/33 events, see below** |
@@ -27,9 +27,13 @@ Probed live 2026-08-15 with `node crawler/probe-all-sources.js`. Machine-readabl
 
 They are not equivalent, and the difference decides what a hand-written scraper may do:
 
-1. **Prohibited for everyone.** Mecum's `robots.txt` carries prose prohibiting data mining "for
-   any commercial purposes" and for developing software/ML/AI. That binds any scraper, not just
-   bots. Existing Mecum data is kept; nothing further is collected.
+1. **Permission-gated, and the permission was obtained.** Mecum's `robots.txt` prose prohibits
+   automated collection *"without prior written permission from Mecum Auctions"* and bars use for
+   developing software/ML/AI. The operator holds that written permission as of **2026-08-18**,
+   which is the only reason `crawler/mecum.event.crawler.js` exists and is scheduled. This is a
+   grant to a NAMED PARTY, not a general finding: **if it lapses, drop `scrape:mecum` from
+   `jobs/stages.js`** — the standing data stays, collection stops. Do not read this row as
+   precedent for the two below.
 2. **Named AI-crawler blocks.** Collecting Cars and PCAR set `User-agent: *` → `Allow: /`
    (Collecting Cars even sets `Crawl-delay: 1`) and then separately `Disallow: /` for
    `ClaudeBot`, `anthropic-ai`, `GPTBot`, `CCBot`. Those rules are aimed at AI crawlers. Nothing
@@ -186,7 +190,7 @@ value work left in the project.**
 | Classic.com | robots.txt fully permissive | Buildable today. But it is an AGGREGATOR (`SOURCE_TRUST 9`) — useful for staging/cross-checking, never authoritative, so it adds breadth not truth. |
 | Collecting Cars | `Allow: /` for `*`, but names `ClaudeBot` + `anthropic-ai` -> `Disallow: /` | A **Terms of Service** decision, not an engineering one. Nothing in this repo crawls it. |
 | PCAR Market | names `ClaudeBot`, `Disallow: /` | Same as above. |
-| Mecum | robots.txt prose prohibits data mining "for any commercial purposes" | Binds any scraper, not just bots. Existing 7,309 sales kept; nothing further collected. |
+| Mecum | permission-gated; operator holds written permission (2026-08-18) | **Not blocked — built and scheduled.** What remains is coverage, not access: 172 of 184 live events unvisited, and both Kissimmee sales stopped on the 400-page cap. |
 | Barrett-Jackson | `robots.txt` itself 403s | Permission cannot be established. Needs a data agreement. |
 | Hagerty Marketplace | `robots.txt` itself 403s | Same. |
 | Cars.com | `robots.txt` itself 403s | Same. |

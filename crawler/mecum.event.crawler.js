@@ -1,4 +1,10 @@
-// MECUM HARVESTER — per auction event, page-paginated.
+// MECUM HARVESTER — production, per auction event, page-paginated.
+//
+// ── PERMISSION ─────────────────────────────────────────────────────────────────────────
+// robots.txt prose prohibits automated collection "without prior written permission from
+// Mecum Auctions". The operator holds that permission (2026-08-18), which is why this
+// crawler exists and is scheduled. If that permission lapses, remove the stage from
+// jobs/stages.js — the standing data stays, collection stops.
 //
 // ── ROUTE, established by probing rather than assumed ───────────────────────────────────
 // The SEARCH route (/search/?saleResult[0]=sold) is a dead end: it renders no prices, no pager,
@@ -7,7 +13,17 @@
 //   /auctions/{event}/lots/?page=N        e.g. /auctions/kissimmee-2022/lots/?page=1
 //   card   <article> containing an <a href="/lots/{lotId}/{slug}/"> plus a price badge
 //
-// So Mecum partitions by event, the same shape as RM Sotheby's.
+// Lot cards are CLIENT-RENDERED — plain HTTP of the lots page returns zero lot links — so
+// the card walk uses Playwright. Everything that IS server-rendered (sitemaps, the event
+// landing page) uses plain fetch, which is both faster and politer.
+//
+// ── DISCOVERY — their own sitemap, not slug guessing ────────────────────────────────────
+// robots.txt declares sitemap-index.xml, whose auction-sitemap{1..3}.xml list EVERY auction
+// event page back to 2012 (257 distinct slugs). This is what retired the old guessing
+// approach, which failed on 5 of 14 because the pattern is NOT {city}-{year}: 2017-2023
+// Indianapolis sales are "indianapolis-YYYY" while 2020/2024/2025 are "indy-YYYY".
+// Upcoming short codes seen on /results/ (CA26, FL27) never appear in the sitemap with a
+// year suffix and are not past results, so they are simply not enumerated.
 //
 // ── SELECTOR POLICY ────────────────────────────────────────────────────────────────────
 // Their class names are CSS-module hashed — `CardLot-module__NbNTua__card`, where `NbNTua`
@@ -15,17 +31,32 @@
 // release. So selection is STRUCTURAL: an <article> (or nearest container) holding a link whose
 // href matches /lots/{id}/{slug}/. That survives a restyle.
 //
-// ── DATE ───────────────────────────────────────────────────────────────────────────────
+// ── DATE — three layers, cheapest first ─────────────────────────────────────────────────
 // Lot cards carry no date; only the event does. Mecum previously yielded 0% sold_at and every
-// Mecum sale was silently absent from trend maths. One date is resolved per EVENT and stamped
-// on its lots, and the adapter refuses any lot without one.
+// Mecum sale was silently absent from trend maths. One date per event, resolved from:
+//   1. the state file (resolved on a previous run)
+//   2. the event LANDING page's og:description, server-rendered, one plain fetch — measured
+//      form: "…in Dallas, TX on September 4-7, 2024." The LAST day of the range is the sale's
+//      close, same policy as RM/Gooding/Broad Arrow.
+//   3. the rendered lots page's day filters ("Thursday, January 6") — the original method,
+//      kept as fallback because the landing page has no date for some older events.
+// The adapter refuses any lot without a date — no hollow rows, ever.
+//
+// ── HONEST COMPLETENESS ─────────────────────────────────────────────────────────────────
+// The old version capped an event at 60 pages and marked it COMPLETE merely for having a
+// date. Measured consequence: kissimmee-2024 kept exactly 1400 sales — right at the
+// 60 x ~24-card ceiling — so the flagship events were silently truncated. Now an event is
+// COMPLETE only when pagination terminated NATURALLY (a page with zero cards); hitting the
+// page cap leaves it PARTIAL so the next run resumes it.
 //
 // Cron-safe on the same contract as the others: idempotent on (source, source_lot_id),
-// event-level resume state, completed events skipped.
+// event-level resume state, completed events skipped, events that yield nothing after
+// several attempts are marked dead instead of retried forever.
 //
 // Usage:
-//   node crawler/mecum.event.crawler.js discover
+//   node crawler/mecum.event.crawler.js discover     # sitemap -> state (no harvesting)
 //   node crawler/mecum.event.crawler.js run [maxEvents]
+//   node crawler/mecum.event.crawler.js auto         # discover + run 3 (the cron shape)
 
 "use strict";
 
@@ -36,40 +67,179 @@ const { adaptLot } = require("./mecum-adapt");
 
 const OUT = path.join(__dirname, "..", "samples", "scraped", "mecum.json");
 const STATE = path.join(__dirname, "..", "samples", "mecum.state.json");
-const MAX_PAGES_PER_EVENT = 60; // events run to a few thousand lots; 60 x ~24 covers them
+// A second instance of this crawler is not merely wasteful — both hold their own in-memory
+// copy of the records map, so their saves ERASE each other's work (measured: a detached run
+// and a foreground run interleaved and one clobbered the other's state). Same guard shape as
+// jobs/cron.js: pid in a lock file, stale if the pid is gone.
+const LOCK = path.join(__dirname, "..", "data", "mecum-crawler.lock");
 
-const load = (p, d) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return d; } };
+// A page holds ~24 cards; the biggest events (Kissimmee, ~4000 run lots incl. unsold) need
+// ~200 pages. 400 leaves margin, and hitting it marks PARTIAL rather than COMPLETE.
+const MAX_PAGES_PER_EVENT = 400;
+// Give up on an event after this many attempts that produced neither cards nor a date —
+// protects against a permanently-dead slug being retried every run forever.
+const MAX_ATTEMPTS = 3;
+
+const HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+  Accept: "text/html,application/xhtml+xml",
+  "Accept-Language": "en-US,en;q=0.9",
+};
+// robots.txt: Crawl-delay: 1. We hold ourselves above the floor for the plain fetches; the
+// browser walk is far slower than this per page already.
+const DELAY_MS = Number(process.env.DELAY_MS) || 1500;
+
+const SITEMAPS = [1, 2, 3].map((i) => `https://www.mecum.com/sitemaps/auction-sitemap${i}.xml`);
+
+// Non-car SALES, excluded at the event level for the same reason BaT's ten non-car categories
+// are: this is a collector-CAR index, and admitting them floods review one lot at a time.
+// Taxonomy-level exclusion only — anything merely ambiguous (named collections, one-off
+// venue slugs) is left to the resolver's gates, which is where that judgement belongs.
+// Note "motorocycle" is not a typo here: indy-motorocycle-2015 is Mecum's own misspelling.
+const NON_CAR_EVENT = /motorcycle|motorocycle|-moto\b|moto-|tractor|gone-farmin|road-?art|toy-auction|sign-collection/i;
 
 const MONTHS = { january: 0, february: 1, march: 2, april: 3, may: 4, june: 5, july: 6,
   august: 7, september: 8, october: 9, november: 10, december: 11 };
 
-// Extract the event's LAST auction day. Their lots page prints the day filters in full
-// ("Thursday, January 6"), and the year is in the event slug (kissimmee-2022). A multi-day sale
-// is dated by when it closed.
-function dateFromPage(text, eventSlug) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const load = (p, d) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return d; } };
+
+const state = load(STATE, { events: {}, updated: null });
+const records = new Map(load(OUT, []).map((r) => [`${r.source}|${r.source_lot_id}`, r]));
+const startCount = records.size;
+
+// Atomic write: temp file + rename. A plain writeFileSync can be observed half-written (or,
+// if the process is killed mid-save, left that way) — measured: a 25-min-timeout kill saved
+// the records file but not the state file, orphaning 548 already-harvested sales from the
+// resume map. rename() on the same volume is atomic, so a save either lands or doesn't.
+const saveAtomic = (p, data) => {
+  const tmp = `${p}.tmp`;
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, p);
+};
+
+const save = () => {
+  fs.mkdirSync(path.dirname(OUT), { recursive: true });
+  saveAtomic(OUT, JSON.stringify([...records.values()], null, 1));
+  state.updated = new Date().toISOString();
+  saveAtomic(STATE, JSON.stringify(state, null, 1));
+};
+
+// ── DISCOVERY: sitemap -> event slugs ──────────────────────────────────────────────────
+
+async function fetchText(url) {
+  const res = await fetch(url, { headers: HEADERS, redirect: "follow", signal: AbortSignal.timeout(30000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
+  return res.text();
+}
+
+async function discover() {
+  const slugs = new Set();
+  for (const sm of SITEMAPS) {
+    const xml = await fetchText(sm);
+    for (const m of xml.matchAll(/<loc>[^<]*\/auctions\/([a-z0-9-]+)\/?<\/loc>/gi)) slugs.add(m[1].toLowerCase());
+    await sleep(DELAY_MS);
+  }
+
+  let added = 0;
+  const known = new Set(Object.keys(state.events));
+  for (const s of slugs) {
+    if (NON_CAR_EVENT.test(s)) continue;
+    if (known.has(s)) continue;
+    state.events[s] = { complete: false, date: null, lots: 0, attempts: 0 };
+    added++;
+  }
+
+  // Slugs in state that the sitemap does not list were guesses from the pre-sitemap era
+  // (measured: indy-2022 and indy-2023 never existed — those years are "indianapolis-YYYY").
+  // Mark them dead rather than deleting, so the history of the attempt is kept.
+  //
+  // ABSENCE FROM THE SITEMAP IS NOT PROOF THE EVENT DOES NOT EXIST. A slug that has already
+  // returned lots demonstrably resolves, whatever the sitemap says — monterey-2025 was retired
+  // this way while holding 436 real lots, and because `dead` is filtered out of `todo`
+  // permanently those lots would never have refreshed and the event would never have resumed.
+  // A guess that never produced anything is still safe to retire.
+  let dead = 0, keptAlive = 0;
+  for (const s of Object.keys(state.events)) {
+    const m = state.events[s];
+    if (slugs.has(s) || m.dead) continue;
+    if ((m.lots || 0) > 0) { keptAlive++; continue; } // it works; the sitemap is just incomplete
+    m.dead = true;
+    dead++;
+  }
+  // Revive anything previously retired despite having produced lots.
+  for (const s of Object.keys(state.events)) {
+    const m = state.events[s];
+    if (m.dead && (m.lots || 0) > 0 && !slugs.has(s)) { delete m.dead; keptAlive++; }
+  }
+
+  save();
+  console.log(`discovery: ${slugs.size} sitemap events, ${added} newly queued, ${dead} unproductive guesses marked dead` +
+              (keptAlive ? `, ${keptAlive} kept alive despite being absent from the sitemap (they produced lots)` : "") +
+              ` (${Object.keys(state.events).filter((s) => !state.events[s].dead).length} live)`);
+  return slugs;
+}
+
+// ── DATE resolution ────────────────────────────────────────────────────────────────────
+
+// Landing-page og:description date ranges, measured forms:
+//   "on September 4-7, 2024."     -> Sept 7
+//   "on January 3-16, 2022."      -> Jan 16
+//   "on May 28-June 1, 2024."     -> June 1  (range crossing a month boundary)
+//   "on March 26, 2021."          -> Mar 26
+// Returns the LAST date in the LAST range found (an event is dated by when it closed).
+function dateFromLanding(html) {
+  const text = String(html || "");
+  const RE = new RegExp(
+    `\\b(january|february|march|april|may|june|july|august|september|october|november|december)` +
+    `\\s+(\\d{1,2})` +
+    `(?:\\s*[-\u2013]\\s*((?:january|february|march|april|may|june|july|august|september|october|november|december)\\s+)?(\\d{1,2}))?` +
+    `,?\\s*((?:19|20)\\d{2})`,
+    "gi"
+  );
+  let last = null;
+  for (const m of text.matchAll(RE)) {
+    const y = Number(m[5]);
+    const mo = MONTHS[m[1].toLowerCase()];
+    // m[3] carries its trailing space by construction ("June ") — trim before lookup.
+    const mo2 = m[3] ? MONTHS[m[3].trim().toLowerCase()] : mo;
+    const d = m[4] ? Number(m[4]) : Number(m[2]);
+    if (mo == null || mo2 == null) continue;
+    const dt = new Date(Date.UTC(y, mo2, d, 12));
+    if (!Number.isNaN(dt.getTime()) && (!last || dt > last)) last = dt;
+  }
+  return last ? last.toISOString() : null;
+}
+
+const MONTH_INDEX = MONTHS;
+
+// Fallback: the rendered lots page prints day filters in full ("Thursday, January 6"); the
+// year comes from the event slug. Multi-day sale dated by its last day.
+function dateFromLotsPage(text, eventSlug) {
   const yearM = String(eventSlug).match(/(20\d{2}|19\d{2})/);
   if (!yearM) return null;
   const year = Number(yearM[1]);
   const days = [...String(text).matchAll(/\b(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day,\s+([A-Z][a-z]+)\s+(\d{1,2})\b/g)];
-  if (!days.length) return null;
   const parsed = days
-    .map((d) => ({ m: MONTHS[d[1].toLowerCase()], d: Number(d[2]) }))
+    .map((d) => ({ m: MONTH_INDEX[d[1].toLowerCase()], d: Number(d[2]) }))
     .filter((x) => x.m != null);
   if (!parsed.length) return null;
   const last = parsed[parsed.length - 1];
   return new Date(Date.UTC(year, last.m, last.d, 12)).toISOString();
 }
 
-const state = load(STATE, { events: {}, updated: null });
-const records = new Map(load(OUT, []).map((r) => [`${r.source}|${r.source_lot_id}`, r]));
-const startCount = records.size;
+// One plain fetch of /auctions/{event}/ — resolves the event date server-side before any
+// browser page is spent on it.
+async function resolveEventDate(event) {
+  try {
+    const html = await fetchText(`https://www.mecum.com/auctions/${event}/`);
+    await sleep(DELAY_MS);
+    return dateFromLanding(html);
+  } catch { return null; }
+}
 
-const save = () => {
-  fs.mkdirSync(path.dirname(OUT), { recursive: true });
-  fs.writeFileSync(OUT, JSON.stringify([...records.values()], null, 1));
-  state.updated = new Date().toISOString();
-  fs.writeFileSync(STATE, JSON.stringify(state, null, 1));
-};
+// ── HARVEST ────────────────────────────────────────────────────────────────────────────
 
 // Pull cards structurally — never by hashed class name.
 const EXTRACT = () => {
@@ -86,92 +256,50 @@ const EXTRACT = () => {
   return { cards: out, bodyText: document.body.innerText.slice(0, 4000) };
 };
 
-// DISCOVERY ROUTES, found by probing (crawler/probe-mecum-index.js) rather than guessed.
-//
-//   /results/        the ARCHIVE — its year filter offers 21 distinct years, so history runs
-//                    back roughly two decades. This is the route that matters.
-//   /past-auctions/  completed sales, recent
-//   /auctions/       UPCOMING only — kept last, and its events are filtered out below because
-//                    a sale that has not happened has no results (measured: nashville-2026
-//                    yielded 0 sales from 706 cards, correctly).
-//
-// Guessing slugs was the previous approach and it failed on 5 of 14: the pattern is not
-// {city}-{year}. Real events include dallas-2025, glendale-2026, indy-fall-special-2025 and
-// las-vegas-motorcycles-2026 — city and year do not line up the way they appear to.
-const DISCOVERY_ROUTES = [
-  "https://www.mecum.com/results/",
-  "https://www.mecum.com/past-auctions/",
-  "https://www.mecum.com/auctions/",
-];
-
-// Motorcycle-only sales, excluded for the same reason BaT's Motorcycles category is: this is a
-// collector-CAR index, and admitting them would flood human review one lot at a time.
-const NON_CAR_EVENT = /motorcycle|moto-|-moto\b|lv-motorcycles/i;
-
-async function discover() {
-  const events = new Map();
-  const crawler = new PlaywrightCrawler({
-    maxRequestsPerCrawl: DISCOVERY_ROUTES.length,
-    maxConcurrency: 1,
-    maxRequestRetries: 1,
-    requestHandlerTimeoutSecs: 150,
-    navigationTimeoutSecs: 120,
-    async requestHandler({ page, request }) {
-      await page.waitForTimeout(7000);
-      for (let i = 0; i < 4; i++) {
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await page.waitForTimeout(2000);
-      }
-      const found = await page.evaluate(() =>
-        Array.from(document.querySelectorAll('a[href*="/auctions/"]'))
-          .map((a) => (a.getAttribute("href") || "").match(/\/auctions\/([a-z0-9-]+-(?:19|20)\d{2})\/?/i))
-          .filter(Boolean).map((m) => m[1]));
-      for (const e of found) {
-        if (NON_CAR_EVENT.test(e)) continue;
-        // First route wins, so an event found on /results/ is recorded as archival rather than
-        // upcoming even if /auctions/ also lists it.
-        if (!events.has(e)) events.set(e, request.url);
-      }
-    },
-    failedRequestHandler() { /* one dead route must not abort discovery */ },
-  });
-  await crawler.run(DISCOVERY_ROUTES);
-  return events;
-}
-
 async function run(maxEvents) {
-  console.log(`resuming: ${startCount} records, ${Object.keys(state.events).length} events known\n`);
-
-  // Only discover when asked. /auctions/ lists UPCOMING sales, whose lots have no results yet —
-  // harvesting those burns pages for zero records (measured: nashville-2026 gave 0 sales from
-  // 706 cards, correctly, because the sale is a month away). Past events are the ones with
-  // prices, and they have to be supplied or discovered from a results index.
-  if (process.argv.includes("--discover")) {
-    const discovered = await discover();
-    for (const e of discovered.keys()) if (!state.events[e]) state.events[e] = { complete: false, date: null, lots: 0 };
-  }
-  console.log(`${Object.keys(state.events).length} events known\n`);
+  console.log(`resuming: ${records.size} records, ${Object.keys(state.events).length} events known\n`);
 
   const now = Date.now();
   const todo = Object.entries(state.events)
+    .filter(([, m]) => !m.dead)
     .filter(([, m]) => !m.complete)
+    .filter(([, m]) => (m.attempts || 0) < MAX_ATTEMPTS)
     // Skip events we already know are in the future — no results to collect.
     .filter(([, m]) => !m.date || new Date(m.date).getTime() < now)
     .slice(0, maxEvents);
   if (!todo.length) return console.log("nothing outstanding");
 
   for (const [event, meta] of todo) {
-    let added = 0, skipped = 0, pages = 0, eventDate = meta.date;
+    let added = 0, skipped = 0, pages = 0;
+    let eventDate = meta.date;
+    let hitCap = false;
 
-    const crawler = new PlaywrightCrawler({
+    // Layer 2: landing page, before any browser cost is spent on the event.
+    if (!eventDate) eventDate = await resolveEventDate(event);
+    if (!eventDate) console.log(`  (no date from landing page for ${event}; will try the lots page day filters)`);
+
+    // INTRA-EVENT CHECKPOINT. A big event is 200+ browser pages (~20 min); saving only
+    // between events meant a timeout or crash restarted it from page 1 every time — measured:
+    // a 25-minute kill left zero records. Pages of a settled historical archive are stable, so
+    // resuming from the last checkpointed page is safe. `lastPage` starts at the checkpoint;
+    // page 1 is re-walked only when there is no checkpoint, and it is walked anyway for date
+    // resolution in that case (the day filters live on page 1).
+    const firstPage = meta.lastPage && meta.date ? meta.lastPage : 1;
+    // The page cap counts pages walked IN THIS CRAWL, not the absolute page number — a resume
+    // from page 401 must be able to walk 400 more, not insta-cap against `pageNo >= 400`
+    // (which made a capped event permanently unresumable).
+    let walked = 0;
+
+    await new PlaywrightCrawler({
       maxRequestsPerCrawl: MAX_PAGES_PER_EVENT,
       maxConcurrency: 1, maxRequestRetries: 1,
       requestHandlerTimeoutSecs: 120, navigationTimeoutSecs: 90,
       async requestHandler({ page, request, crawler: c }) {
         await page.waitForTimeout(4500);
         const { cards, bodyText } = await page.evaluate(EXTRACT);
-        if (!eventDate) eventDate = dateFromPage(bodyText, event);
+        if (!eventDate) eventDate = dateFromLotsPage(bodyText, event);
         pages++;
+        walked++;
 
         for (const card of cards) {
           const out = adaptLot(card, eventDate, { event, eventName: event });
@@ -182,27 +310,45 @@ async function run(maxEvents) {
           } else skipped++;
         }
 
-        // Follow pagination only while cards keep arriving.
+        // Follow pagination only while cards keep arriving. Stop conditions are a page with
+        // no cards (natural end -> COMPLETE) or the page cap (-> PARTIAL, resumed next run).
         const pageNo = Number((request.url.match(/[?&]page=(\d+)/) || [])[1] || 1);
-        if (cards.length > 0 && pageNo < MAX_PAGES_PER_EVENT) {
+        if (cards.length > 0 && walked < MAX_PAGES_PER_EVENT) {
           await c.addRequests([`https://www.mecum.com/auctions/${event}/lots/?page=${pageNo + 1}`]);
+        } else if (cards.length > 0 && walked >= MAX_PAGES_PER_EVENT) {
+          hitCap = true;
+        }
+
+        // Checkpoint every 10 pages: records so far + the next page to walk. Cheap (two file
+        // writes) against the cost of re-walking 100 pages after a kill.
+        if (pageNo % 10 === 0) {
+          meta.date = eventDate;
+          meta.lastPage = pageNo + 1;
+          meta.checkpointedAt = new Date().toISOString();
+          save();
+          console.log(`    ...${event} page ${pageNo} (${records.size} records total)`);
         }
       },
       failedRequestHandler() { /* one bad page must not abort the event */ },
-    });
+    }).run([`https://www.mecum.com/auctions/${event}/lots/?page=${firstPage}`]);
 
-    await crawler.run([`https://www.mecum.com/auctions/${event}/lots/?page=1`]);
-
+    meta.attempts = (meta.attempts || 0) + 1;
     meta.date = eventDate;
     meta.lots = [...records.values()].filter((r) => r._extra && r._extra.event === event).length;
-    // Only COMPLETE when a date was resolved — otherwise every lot was refused and re-running
-    // after fixing the date is the whole point.
-    meta.complete = Boolean(eventDate);
+
+    const naturallyEnded = pages > 0 && !hitCap;
+    const produced = added > 0 || meta.lots > 0;
+    // COMPLETE requires: a resolved date AND natural pagination end AND something kept.
+    // A resolved date with zero lots on a live event is "no results yet" (upcoming sale) —
+    // left incomplete, and MAX_ATTEMPTS eventually retires it.
+    meta.complete = Boolean(eventDate && naturallyEnded && produced);
+    meta.hitCap = hitCap || undefined;
+    if (meta.complete) { meta.lastPage = undefined; meta.checkpointedAt = undefined; }
     meta.harvestedAt = new Date().toISOString();
 
     console.log(
-      `${meta.complete ? "DONE " : "PART "} ${event.padEnd(24)} pages=${String(pages).padStart(3)} ` +
-      `+${String(added).padStart(4)} sales  skipped=${String(skipped).padStart(4)}  date=${eventDate ? eventDate.slice(0, 10) : "UNRESOLVED"}`
+      `${meta.complete ? "DONE " : hitCap ? "CAP  " : "PART "} ${event.padEnd(28)} pages=${String(pages).padStart(4)}` +
+      ` +${String(added).padStart(4)} sales  skipped=${String(skipped).padStart(4)}  date=${eventDate ? eventDate.slice(0, 10) : "UNRESOLVED"}`
     );
     save();
   }
@@ -213,5 +359,32 @@ async function run(maxEvents) {
 }
 
 const mode = process.argv[2] || "run";
-if (mode === "discover") discover().then((e) => { console.log(`${e.size} events:`); for (const k of [...e.keys()].slice(0, 40)) console.log("  " + k); });
-else run(Number(process.argv[3]) || 3);
+
+// ── single-instance lock, acquired before any harvesting mode ──────────────────────────
+function acquireLock() {
+  try {
+    const l = JSON.parse(fs.readFileSync(LOCK, "utf8"));
+    try { process.kill(l.pid, 0); 
+      console.error(`REFUSING TO START: another mecum crawler is running (pid ${l.pid}, since ${l.startedAt}).`);
+      console.error(`Two instances erase each other's saves. If this is wrong, delete ${LOCK}.`);
+      process.exit(3);
+    } catch (e) { if (e.code === "EPERM") { console.error(`REFUSING TO START: pid ${l.pid} holds the lock.`); process.exit(3); } }
+  } catch { /* no lock, or unreadable — proceed */ }
+  fs.mkdirSync(path.dirname(LOCK), { recursive: true });
+  fs.writeFileSync(LOCK, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }, null, 1));
+}
+const releaseLock = () => { try { fs.unlinkSync(LOCK); } catch {} };
+process.on("exit", releaseLock);
+process.on("SIGINT", () => { releaseLock(); process.exit(130); });
+if (mode === "run" || mode === "auto") acquireLock();
+
+if (mode === "discover") {
+  discover().catch((e) => { console.error(e.message); process.exit(1); });
+} else if (mode === "auto") {
+  discover().then(() => run(3)).catch((e) => { console.error(e.message); process.exit(1); });
+} else if (mode === "run") {
+  run(Number(process.argv[3]) || 3).catch((e) => { console.error(e.message); process.exit(1); });
+} else {
+  console.error("usage: node crawler/mecum.event.crawler.js [discover|run|maxEvents|auto]");
+  process.exit(2);
+}

@@ -509,9 +509,11 @@ business decision or an oversight); this is an explicit, named "no."
 Full detail in `notes/source-registry.md`; the distinction decides what a hand-written scraper
 may do, so it is not collapsed into one bucket:
 
-- **Prohibited for everyone.** **Mecum** — robots.txt prose prohibits data mining "for any
-  commercial purposes" and for developing software/ML/AI. Binds any scraper, not just bots. The
-  7,300 sales already collected are kept; nothing further is added.
+- **Permission-gated, and the permission was obtained.** **Mecum** — robots.txt prose bars
+  automated collection *"without prior written permission from Mecum Auctions"*. The operator
+  holds that written permission as of **2026-08-18**, which is why the crawler is built and
+  scheduled. A grant to a NAMED PARTY, not a general finding: if it lapses, drop `scrape:mecum`
+  from `jobs/stages.js` — the standing data stays, collection stops.
 - **Named AI-crawler blocks.** **Collecting Cars**, **PCAR Market** — `User-agent: *` is
   `Allow: /`, then `ClaudeBot` / `anthropic-ai` / `GPTBot` / `CCBot` are each `Disallow: /`.
   Nothing here crawls them. Whether that binds a scraper a human writes and runs themselves is a
