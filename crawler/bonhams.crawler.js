@@ -38,8 +38,8 @@
 //   "other"    a different department
 //   "gone"     404
 //   "offsite"  redirects to a Bonhams partner house on its own domain (see onBonhams below)
-//   {k:"cars", lots, hits, cars, carsExpected, pages}   harvested
-//   {k:"err", tries}                                    network failure, retried up to MAX_TRIES
+//   {k:"cars", lots, hits, cars, carsExpected, kept, endsAt, pages}   harvested
+//   {k:"err", tries}                                                  network failure, retried
 // Re-running never re-fetches a known non-car auction, which is what keeps the 11k enumeration
 // a one-time cost rather than a repeated one.
 //
@@ -50,6 +50,17 @@
 //
 // Repairs are visited BEFORE unexplored ids: a re-queued entry is a known car auction with known
 // missing lots, whereas an unvisited id turns out to be non-car about 93% of the time.
+//
+// ── STAYING CURRENT (this is a nightly job, not a one-off import) ──────────────────────────
+// Two things have to keep moving or the source silently freezes:
+//   1. The sitemap id list EXPIRES (IDS_TTL_MS). Cached forever, it was read once and every
+//      auction Bonhams published afterwards was invisible — a nightly run would never have
+//      found another new sale.
+//   2. An auction whose lots are all status NEW has not happened yet. It is fully paginated and
+//      yields nothing, which looked "complete"; 4 such auctions were sitting on 58 car lots
+//      dated weeks out. `kept < cars` re-queues them until RECHECK_DAYS past `endsAt`.
+// Steady-state cost is therefore small: one sitemap request, plus the handful of auctions that
+// are upcoming or recently concluded. The 11k enumeration is not repeated.
 //
 // Usage:
 //   node crawler/bonhams.crawler.js            # resume, default budget
@@ -68,6 +79,14 @@ const HEADERS = { "User-Agent": UA, Accept: "text/html,application/xhtml+xml", "
 // robots.txt sets no Crawl-delay. 1.2s is self-imposed: each response is ~500KB, so this is
 // deliberately gentler than the request count alone suggests.
 const DELAY_MS = 1200;
+
+// How long a cached sitemap id list stays usable. Bonhams adds auctions continuously, so this is
+// what keeps a scheduled run finding NEW sales rather than re-sweeping a frozen list.
+const IDS_TTL_MS = 12 * 60 * 60 * 1000;
+
+// How long after a sale date to keep re-checking an auction whose lots had not concluded.
+// Same window rms and gooding use — results post late, especially on multi-day sales.
+const RECHECK_DAYS = 45;
 
 const SITEMAP = "https://www.bonhams.com/sitemap-sale.xml";
 const AUCTION = (id) => `https://cars.bonhams.com/auction/${id}/`;
@@ -125,11 +144,26 @@ async function run() {
 
   console.log(`resuming: ${sales.size} sales on file, ${Object.keys(state.auctions).length} auctions already classified\n`);
 
-  // The id list changes rarely; cache it so a resumed run doesn't re-download 1.6MB of XML.
-  if (!state.ids || !state.ids.length) {
+  // The id list is cached so a resumed run doesn't re-download 1.6MB of XML — but it MUST expire.
+  // Caching it forever (the original behaviour) meant the sitemap was read exactly once and every
+  // auction Bonhams published afterwards was invisible: a nightly run would have kept sweeping the
+  // same finite id list and never picked up a new sale again. One request a day is the entire cost
+  // of staying current.
+  const idsAge = Date.now() - Date.parse(state.idsAt || 0);
+  if (!state.ids || !state.ids.length || !(idsAge < IDS_TTL_MS)) {
     console.log(`fetching ${SITEMAP} ...`);
-    state.ids = await fetchAuctionIds();
-    console.log(`  ${state.ids.length} auctions listed (ids ${state.ids[state.ids.length - 1]}..${state.ids[0]})\n`);
+    const fresh = await fetchAuctionIds();
+    if (fresh.length) {
+      const before = new Set(state.ids || []);
+      const added = fresh.filter((id) => !before.has(id));
+      state.ids = fresh;
+      state.idsAt = new Date().toISOString();
+      console.log(`  ${fresh.length} auctions listed (ids ${fresh[fresh.length - 1]}..${fresh[0]})` +
+                  (added.length ? `, ${added.length} new since last fetch` : ""));
+    } else if (state.ids && state.ids.length) {
+      console.log("  sitemap unreachable — continuing with the cached id list");
+    }
+    console.log("");
     fs.mkdirSync(path.dirname(STATE), { recursive: true });
     fs.writeFileSync(STATE, JSON.stringify(state));
   }
@@ -150,7 +184,24 @@ async function run() {
       return e === "cars" || e === "http0" || e === "http403" || /^http5/.test(e);
     }
     if (e.k === "err") return (e.tries ?? 0) < MAX_TRIES;
-    return e.k === "cars" && (e.lots ?? 0) < (e.hits ?? 0) && (e.cars ?? 0) < (e.carsExpected ?? 0);
+    if (e.k !== "cars") return false;
+
+    // Truncated: the auction holds cars we never reached.
+    if ((e.lots ?? 0) < (e.hits ?? 0) && (e.cars ?? 0) < (e.carsExpected ?? 0)) return true;
+
+    // NOT YET CONCLUDED. An auction can be fully paginated and still yield no records because
+    // every lot is status NEW — it has not happened yet. Marking that terminal loses the sale
+    // permanently once it does: 4 such auctions were already holding 58 car lots, dated
+    // 2026-09-19 through 2026-10-30, that no later run would ever have gone back for.
+    // Re-checked until RECHECK_DAYS past the sale date, the same window rms and gooding use,
+    // because results post late. An unknown/sentinel date (Bonhams uses 2100-12-31 for "not
+    // scheduled") keeps it in the queue, which is the safe direction.
+    if ((e.kept ?? 0) < (e.cars ?? 0)) {
+      const ends = Date.parse(e.endsAt || "");
+      if (!Number.isFinite(ends)) return true;
+      return Date.now() < ends + RECHECK_DAYS * 86400000;
+    }
+    return false;
   };
 
   // ORDER: repairs before exploration. A re-queued entry is a KNOWN car auction with known
@@ -250,14 +301,15 @@ async function run() {
 
     carAuctions++;
     const carsFound = countCars();
-    const name = pp?.auction?.dates?.start?.[0]?.date?.datetime?.slice(0, 10) ?? "?";
+    const auctionDate = pp?.auction?.dates?.start?.[0]?.date?.datetime?.slice(0, 10) ?? null;
+    const name = auctionDate ?? "?";
     const short = carsExpected != null && carsFound < carsExpected ? `  SHORT ${carsFound}/${carsExpected} cars` : "";
     console.log(
       `CARS  ${String(id).padEnd(6)} ${name}  ${String(got).padStart(4)} kept  ` +
       `(${byId.size}/${nbHits} lots, ${pages}p, ${carsFound} car lots)${short}`
     );
 
-    state.auctions[id] = { k: "cars", lots: byId.size, hits: nbHits, cars: carsFound, carsExpected, pages };
+    state.auctions[id] = { k: "cars", lots: byId.size, hits: nbHits, cars: carsFound, carsExpected, kept: got, endsAt: auctionDate, pages };
     fs.mkdirSync(path.dirname(OUT), { recursive: true });
     fs.writeFileSync(OUT, JSON.stringify([...sales.values()], null, 1));
     saveState();
