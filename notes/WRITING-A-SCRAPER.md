@@ -113,6 +113,12 @@ Probed 2026-08-18, hand this straight to your scraper:
 indirect: it aggregates across houses we cannot reach directly, so it can partially cover
 Barrett-Jackson / Hagerty / Collecting Cars. Treat anything from it as a lead, not a fact.
 
+The implementation is `crawler/classic.crawler.js` plus `crawler/classic-adapt.js`. It uses the public
+past-auction and vehicle detail pages, stores data in `samples/staging/classic-leads.json`, and
+preserves the upstream auction-house URL. It refuses a sold lead without an explicit USD price,
+sale date, and upstream URL. It is intentionally not a cron stage and must never write to
+`samples/scraped/` or `samples/listings/`.
+
 ### Already built — just needs running, no new code
 
 | source | remaining | command |
