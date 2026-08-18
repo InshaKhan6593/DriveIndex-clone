@@ -80,6 +80,18 @@ const MAX_PAGES_PER_EVENT = 400;
 // protects against a permanently-dead slug being retried every run forever.
 const MAX_ATTEMPTS = 3;
 
+// Pages are render-bound, not delay-bound (~5.7s each), so concurrency is the lever. At 3 the
+// aggregate request spacing is still ~1.9s, comfortably above the Crawl-delay: 1 their robots.txt
+// declares — this goes faster without going harder at their server. Override with MECUM_CONCURRENCY.
+const CONCURRENCY = Number(process.env.MECUM_CONCURRENCY) || 3;
+
+// Assets we never read. Aborting them cuts page weight to the HTML + the XHR that fills the cards.
+const BLOCKED_RESOURCES = new Set(["image", "media", "font", "stylesheet"]);
+
+// Time given to client-side rendering before the cards are read. 4.5s was chosen when every
+// image was also loading; with those blocked the cards settle sooner.
+const SETTLE_MS = Number(process.env.MECUM_SETTLE_MS) || 2500;
+
 const HEADERS = {
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
   Accept: "text/html,application/xhtml+xml",
@@ -292,10 +304,20 @@ async function run(maxEvents) {
 
     await new PlaywrightCrawler({
       maxRequestsPerCrawl: MAX_PAGES_PER_EVENT,
-      maxConcurrency: 1, maxRequestRetries: 1,
+      maxConcurrency: CONCURRENCY, maxRequestRetries: 1,
       requestHandlerTimeoutSecs: 120, navigationTimeoutSecs: 90,
+      // Only the lot cards are read, so every image, font, stylesheet and tracker on the page is
+      // downloaded and thrown away. Measured before this: ~5.7s per page, which put the 137-event
+      // backlog at ~32 hours. Blocking them is the single biggest saving available without
+      // touching politeness — the request count to Mecum is unchanged, each one is just smaller.
+      preNavigationHooks: [async ({ page }) => {
+        await page.route("**/*", (route) => {
+          const t = route.request().resourceType();
+          return BLOCKED_RESOURCES.has(t) ? route.abort() : route.continue();
+        });
+      }],
       async requestHandler({ page, request, crawler: c }) {
-        await page.waitForTimeout(4500);
+        await page.waitForTimeout(SETTLE_MS);
         const { cards, bodyText } = await page.evaluate(EXTRACT);
         if (!eventDate) eventDate = dateFromLotsPage(bodyText, event);
         pages++;
