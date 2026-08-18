@@ -80,16 +80,23 @@ const MAX_PAGES_PER_EVENT = 400;
 // protects against a permanently-dead slug being retried every run forever.
 const MAX_ATTEMPTS = 3;
 
-// Pages are render-bound, not delay-bound (~5.7s each), so concurrency is the lever. At 3 the
-// aggregate request spacing is still ~1.9s, comfortably above the Crawl-delay: 1 their robots.txt
-// declares — this goes faster without going harder at their server. Override with MECUM_CONCURRENCY.
-const CONCURRENCY = Number(process.env.MECUM_CONCURRENCY) || 3;
+// CONCURRENCY CANNOT HELP HERE, and the setting is kept at 1 to say so.
+//
+// Raising it to 3 was tried and measured: Crawlee reported {"currentConcurrency":1,
+// "desiredConcurrency":3} for the entire run. Pagination is a CHAIN — page N+1 is only enqueued
+// after page N has been read, because that is how the end of an event is detected — so the queue
+// never holds more than one request and there is nothing to run in parallel. Parallelism here
+// would mean walking several EVENTS at once, which is a different structure (one crawler
+// instance each) and a different politeness question.
+const CONCURRENCY = Number(process.env.MECUM_CONCURRENCY) || 1;
 
 // Assets we never read. Aborting them cuts page weight to the HTML + the XHR that fills the cards.
 const BLOCKED_RESOURCES = new Set(["image", "media", "font", "stylesheet"]);
 
 // Time given to client-side rendering before the cards are read. 4.5s was chosen when every
-// image was also loading; with those blocked the cards settle sooner.
+// image was also loading; with those blocked the cards settle sooner. This IS where the saving
+// came from — measured 5.7s -> 5.04s per page, i.e. the asset blocking and the shorter settle,
+// not the concurrency above.
 const SETTLE_MS = Number(process.env.MECUM_SETTLE_MS) || 2500;
 
 const HEADERS = {
@@ -272,13 +279,28 @@ async function run(maxEvents) {
   console.log(`resuming: ${records.size} records, ${Object.keys(state.events).length} events known\n`);
 
   const now = Date.now();
-  const todo = Object.entries(state.events)
+  const eligible = Object.entries(state.events)
     .filter(([, m]) => !m.dead)
     .filter(([, m]) => !m.complete)
     .filter(([, m]) => (m.attempts || 0) < MAX_ATTEMPTS)
     // Skip events we already know are in the future — no results to collect.
-    .filter(([, m]) => !m.date || new Date(m.date).getTime() < now)
-    .slice(0, maxEvents);
+    .filter(([, m]) => !m.date || new Date(m.date).getTime() < now);
+
+  // UNVISITED EVENTS FIRST. Selection used to run in plain insertion order, which meant the
+  // events harvested earliest were also the first re-offered — measured: a 6-event run spent
+  // its entire budget re-walking monterey-2023 for 251 pages and +0 new sales, while 172 events
+  // that had never been touched (137 of them 2012-2021, the whole missing decade) sat behind
+  // them. Resuming a genuinely PARTIAL event is still worth doing, so those come second, and
+  // ahead of anything already producing.
+  const rank = (m) => {
+    if (!m.harvestedAt) return 0;                 // never visited — the real gap
+    if (m.hitCap || m.lastPage) return 1;         // partial, resumable from a checkpoint
+    return 2;                                     // already walked to the end
+  };
+  const todo = eligible.sort((a, b) => rank(a[1]) - rank(b[1])).slice(0, maxEvents);
+
+  const fresh = todo.filter(([, m]) => !m.harvestedAt).length;
+  console.log(`selected ${todo.length} of ${eligible.length} eligible events (${fresh} never visited)`);
   if (!todo.length) return console.log("nothing outstanding");
 
   for (const [event, meta] of todo) {
