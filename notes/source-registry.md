@@ -14,9 +14,9 @@ Probed live 2026-08-15 with `node crawler/probe-all-sources.js`. Machine-readabl
 | Gooding & Company | `good` | yes | 4 | no | **built (2026-08-16)** | **built — 2,030 sales, 41/41 auctions (COMPLETE)** |
 | Broad Arrow Auctions | `broadarrow` | yes | 1 | no (detail only) | **built (2026-08-17)** | **built — 252 sales + 172 listings, 8/33 events, see below** |
 | DuPont Registry | `dupont` | yes (needs real browser UA) | 23 (old route, now redirects) | yes (server-rendered) | **built (2026-08-17)** | **built — listings only, 4,786 VDPs, sitemaps 1–6 of 15, see below** |
-| Bonhams | `bon` | **yes — robots.txt permits** | **85** | no (detail only) | built | **PROOF OF CONCEPT ONLY — 24 sales, one auction, `maxLots` default 5. Biggest open opportunity; see below** |
+| Bonhams | `bon` | **yes — robots.txt permits** | **85** | no (detail only) | **built + scheduled (2026-08-18)** | sitemap-enumerated (11,353 auctions), one request per auction + one per extra page of 48 lots. **Beware: `auctionLots` is page 1 only — see below** |
 | Sotheby's Motorsport | `sms` | yes | 18 | yes | **built (2026-08-16)** | **built — CAPPED at 15/request anonymous of 729 lots, see below** |
-| Classic.com | `classic` | **yes — robots.txt fully permissive** | 40 | yes | — | — (aggregator, `SOURCE_TRUST 9`, staging only, never authoritative) |
+| Classic.com | `classic` | **yes — robots.txt fully permissive** | 40 | yes | **lead adapter (staging only)** | **built — aggregator leads only; never authoritative sales** |
 | Collecting Cars | `collectingcars` | **robots.txt: `Allow: /` for `*`, but names `ClaudeBot` + `anthropic-ai` → `Disallow: /`** | 0 | no | — | **not built — see the note on named-AI blocks below** |
 | PCAR Market | `pcar` | **robots.txt names ClaudeBot, `Disallow: /`** | — | — | — | **not built — see below** |
 | **Barrett-Jackson** | `bj` | **`robots.txt` itself 403s** | — | — | — | **closed — no terms readable, so no permission establishable** |
@@ -82,26 +82,28 @@ is the whole corpus, counted from the database (2026-08-18, `scratchpad/per-sour
 `COUNT(*) WHERE field IS NOT NULL AND field != ''`, grouped by source). Re-run it rather than
 trusting any transcribed copy.
 
-| Field | bat | cab | mecum | rms | good | broadarrow | sms | bon |
+| Field | bat | cab | bon | mecum | rms | good | broadarrow | sms |
 |---|---|---|---|---|---|---|---|---|
-| **rows** | **162,012** | **35,609** | **7,300** | **2,676** | **2,030** | **252** | **25** | **24** |
-| price | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
-| sold_at | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
-| mileage | **0%** | **100%** | 0% | 0% | 0% | 0% | 0% | 38% |
-| vin | 0% | 0% | 0% | 0% | 0% | 77% | 0% | 96% |
-| transmission | 0% | 38% | 0% | 0% | 0% | 0% | 0% | 100% |
-| color | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 13% |
-| image_url | 100% | 100% | 0% | 0% | 0% | 0% | 100% | 0% |
-| price_usd | 100% | 100% | 100% | **68%** | **93%** | **60%** | 100% | 100% |
+| **rows** | **162,261** | **35,766** | **8,265** | **7,309** | **2,749** | **2,043** | **351** | **25** |
+| price / sold_at | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
+| mileage | 0% | 100% | 0% | 0% | 0% | 0% | 0% | 0% |
+| vin | 0% | 0% | 7% | 0% | 0% | 0% | 78% | 0% |
+| transmission | 0% | 38% | 0% | 0% | 0% | 0% | 0% | 0% |
+| color | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% |
+| image_url | 100% | 100% | 100% | 0% | 0% | 0% | 0% | 100% |
+| price_usd | 100% | 100% | 82% | 100% | 100% | 100% | 100% | 100% |
 
-**Cars & Bids remains the highest-quality source** — 100% mileage, the only source that gives it
-at volume. **BaT is 77% of the corpus and supplies 0% mileage**, which is the single biggest
+**Cars & Bids remains the highest-quality source** - 100% mileage, the only source that gives it
+at volume. **BaT is 74% of the corpus and supplies 0% mileage**, which is the single biggest
 quality constraint in the system: the odometer is on its detail page, not the list API the
 crawler uses.
 
-**The `price_usd` gaps are the currency bug, visible per-source.** RM at 68%, Broad Arrow at 60%
-and Gooding at 93% are the international sales whose EUR/GBP/CHF prices were never converted —
-`engine/clean.js` drops every one of them from the maths.
+**`price_usd` is no longer a gap.** It was 68% on RM, 60% on Broad Arrow and 93% on Gooding -
+the international sales whose EUR/GBP/CHF prices were never converted. `fx/` now converts at the
+ECB rate for the day of sale, so every source reads 100% except Bonhams at 82%, and that
+remainder is correct: they are bought-in lots with no published bid, so there is no price to
+convert. Note this makes the numbers CORRECT, not COUNTED - overseas sales are still held out of
+the maths by `non_us_sale`, deliberately (see the README).
 
 ### ⚠️ Structured identity is available and thrown away
 
@@ -142,12 +144,56 @@ falling back to title parsing only when they are absent.
 - **classic** — **aggregator**. Per the build spec it must never create a sale; it is
   staging/backfill only, and always loses survivor selection in dedup (`SOURCE_TRUST` 9).
 
-## Recommended build order for the remaining sources
+## What is left to build (2026-08-18)
 
-1. **sms, classic** — reachable with prices on the index page; cheapest to add.
-2. **rms, good, broadarrow** — reachable but need per-lot detail fetches; more requests.
-3. **collectingcars, pcar, dupont** — need one probing pass each to find the real results route.
-4. **bj, hagerty** — blocked. Requires a commercial/legal decision, not an engineering one.
+Every source that CAN be crawled now is. What remains splits into three kinds of work, and the
+first kind matters more than the other two put together.
+
+### 1. Fix the biggest quality hole: BaT has no mileage
+
+**BaT is 74% of the corpus and supplies mileage on 0% of it.** Cars & Bids is the only source
+that provides it at volume (100%, 35,600 rows); corpus-wide only 16.3% of sales carry an
+odometer reading.
+
+That is not cosmetic. `engine/signal.js` mileage-adjusts every price before fitting a trend, and
+a sale with no odometer falls back to `ctx.avgMiles` — i.e. it is treated as AVERAGE for its car.
+A delivery-mile example car prices 30% above a 60k-mile one, so for three quarters of the corpus
+that adjustment silently does nothing and a 5,000-mile car is compared like for like against a
+150,000-mile one.
+
+The number is on BaT's LOT PAGE, not the list API `crawler/bat-partitioned.crawler.js` reads.
+Fixing it means one extra request per lot — expensive against 162k lots, so it should be done
+newest-first and incrementally, the same shape as the Bonhams repair queue. **This is the highest
+value work left in the project.**
+
+### 2. Push past the ceilings on sources already built
+
+- **BaT sub-partitioning.** Multi-sort is DONE — all 56 partitions x 4 sorts (`td/ta/vd/bd`) are
+  complete. But 11 partitions are still over BaT's own 10,000-result cap (German/sold 69,897;
+  American/sold 66,497), so 4 sorts reach at most 40k of each. Going further needs partitions
+  narrower than 10k — by year or price band inside a category — not more sorts.
+- **Sotheby's Motorsport.** Anonymous access is capped at 15 results per request against 729
+  lots. Needs either an authenticated route or acceptance of the cap.
+- **Backlogs**, which now close on their own via cron but are not finished:
+  Bonhams 4,359 / 11,353 auction ids - Broad Arrow 975 / ~2,730 lots - DuPont 5,969 / 13,814.
+- **`non_us_sale` from a real country field** in `broadarrow`, `gooding` and `sms`. They still
+  derive it from currency, which is wrong in both directions (see the Bonhams note below).
+
+### 3. Sources not built, and why — none of them are merely "unwritten"
+
+| source | status | what would unblock it |
+|---|---|---|
+| Classic.com | robots.txt fully permissive | Buildable today. But it is an AGGREGATOR (`SOURCE_TRUST 9`) — useful for staging/cross-checking, never authoritative, so it adds breadth not truth. |
+| Collecting Cars | `Allow: /` for `*`, but names `ClaudeBot` + `anthropic-ai` -> `Disallow: /` | A **Terms of Service** decision, not an engineering one. Nothing in this repo crawls it. |
+| PCAR Market | names `ClaudeBot`, `Disallow: /` | Same as above. |
+| Mecum | robots.txt prose prohibits data mining "for any commercial purposes" | Binds any scraper, not just bots. Existing 7,309 sales kept; nothing further collected. |
+| Barrett-Jackson | `robots.txt` itself 403s | Permission cannot be established. Needs a data agreement. |
+| Hagerty Marketplace | `robots.txt` itself 403s | Same. |
+| Cars.com | `robots.txt` itself 403s | Same. |
+
+So of the 13 sources, 8 carry sales, 1 is a buildable aggregator, and **4 are closed for
+permission reasons rather than for want of a crawler**. Do not treat a 403 as a puzzle to
+solve — that is how a scraping project becomes a legal problem.
 
 ---
 
@@ -405,39 +451,99 @@ additive migration (`ALTER TABLE listing ADD COLUMN source_lot_id`) before `sche
 permanent loader for that table — reuses the exact same car-identity resolution as `ingest.js` so
 a listing and a sale for the same real car land on the same `car_id`.
 
-## Bonhams: proof-of-concept only, and what a real crawler needs (probed 2026-08-18)
+## Bonhams: sitemap-enumerated, and the 48-lot page cap (built 2026-08-18)
 
-**The 24 sales in the DB are not a harvest.** `_archive/superseded/bonhams.crawler.js` is
-hardcoded to a single auction (`31959`, Laguna Seca) with `maxLots` defaulting to **5**. It was
-written to prove the adapter worked and never promoted to `crawler/`. The archive behind it is
-untouched — this is the largest open source on the list.
+Now a real harvester: `crawler/bonhams.crawler.js` + `crawler/bonhams-adapt.js`, scheduled as
+`scrape:bonhams`. It replaced `_archive/superseded/bonhams.crawler.js`, which was hardcoded to
+one auction (`31959`, Laguna Seca) with `maxLots` defaulting to 5.
 
 `robots.txt` permits it: only `Bytespider` is blocked, and the sole path rules are
-`Disallow: */aggregate$` and `Disallow: */head_image*`. No `Sitemap:` line.
+`Disallow: */aggregate$` and `Disallow: */head_image*`.
 
-**The site is Next.js, so the data is embedded — no per-lot fetch needed.**
-`https://cars.bonhams.com/auction/{id}/` (308-redirects to a slugged URL, follow it) carries
-`__NEXT_DATA__` with `props.pageProps.lotData`:
+**Enumeration — solved via their own sitemap.** `www.bonhams.com/robots.txt` declares
+`Sitemap: http://www.bonhams.com/sitemap.xml`, whose `sitemap-sale.xml` lists **11,353 auctions**
+(ids 189..32778) across every Bonhams division. `/auctions/` embeds only the 5 live auctions and
+there is no past-results index, so the sitemap is the index. Cars are then identified per auction
+— about 93% of ids turn out to be another department.
+
+> Their Algolia/Typesense credentials sit in `runtimeConfig` and are **not used**. Lifting keys
+> out of a client bundle to bulk-export a catalogue is not crawling; same line held on DuPont's
+> disallowed `/api/`.
+
+**The site is Next.js, so lots are embedded — but only the first page of them.**
 
 ```
-lotData.auctionLots   — EVERY lot for the auction in that one response (57 for auction 31959)
-lotData.nbHits        — total lot count
-lotData.pagesOfLots, currencySymbol, highestPrice, lowestPrice
+lotData.auctionLots  — the FIRST 48 LOTS ONLY, never the whole auction
+lotData.nbHits       — the true total (241 for auction 27997)
+lotData.pagesOfLots  — also just page 1; not the remaining pages
+lotData.facets       — counts over the WHOLE auction, incl. facets["department.code"]["MOT-CAR"]
 ```
 
-Per-lot fields confirmed present: `id` (e.g. `"31959-1"` — use verbatim as `source_lot_id`),
-`lotId`, `title`, `slug`, `status` (`"SOLD"`), `price`, `currency`, `auctionEndDate`, `image`,
-`styledDescription`. That is one HTTP request per auction rather than one per lot — the same
-shape Gooding turned out to have, so `crawler/gooding.crawler.js` is the closest reference.
+⚠️ **`auctionLots` is a page, not the auction — this cost 71% of the data.** The first version of
+this crawler read `auctionLots` and stopped. Measured afterwards: of 113 auctions classified as
+cars, **67 had produced zero records**, and across the sampled set 3,379 of 4,740 lots were never
+fetched. Goodwood 2023 (id 27997) holds 241 lots of which **79 are cars, none in the first 48** —
+it logged "0 car lots kept" and was written off. Re-harvesting with pagination took Bonhams from
+1,236 to 4,295 records.
 
-⚠️ **The unsolved piece: enumerating past auctions.** `/auctions/` embeds only `liveAuctions`
-(5 upcoming). No past-results index was found; `/past-auctions/`, `/auction/results/`,
-`/results/`, `/search/` and `/_next/data/{buildId}/…` all 404. Known-good IDs to scan around:
-**31857, 31858, 31959, 32043, 32045, 32060**. A bounded sequential scan works but is wasteful; a
-real index route would be better if one exists.
+**Reaching the rest.** The auction HTML renders its own control as `href="?page=2#page2"`, but the
+server **ignores `?page=`** — every value re-renders page 1 (`?p=`, `?pageNo=`, `?offset=`, `?from=`
+likewise). The site navigates client-side and pulls later pages from the Next.js data route for
+the same page component, which *does* honour it:
 
-Bonhams is also **international** — it is where the `price_usd` gap bites hardest (see the FX
-note in `WRITING-A-SCRAPER.md`). Scaling it without fixing FX would silently discard much of it.
+```
+https://cars.bonhams.com/_next/data/{buildId}/auction/{id}/{auctionName}.json
+    ?auctionId={id}&auctionName={auctionName}&page=N
+```
+
+`buildId` is deploy-scoped, so read it from each auction page's `__NEXT_DATA__` rather than
+hardcoding it. Because `facets` counts cars across the whole auction, paging stops as soon as
+every car is in hand instead of walking all 5 pages of a 240-lot mixed sale.
+
+**Partner houses masquerade as network errors.** Some sitemap ids 308-redirect off-site to
+`bruun-rasmussen.dk` (unreachable from here) and `bukowskis.com` (403) — art, design and watch
+sales. Followed blindly they produced 55 `http0` and 17 `http403` state entries that looked
+transient and were retried forever. The crawler now follows redirects manually and answers
+`offsite` the moment a hop leaves `bonhams.com`, before the doomed request is made.
+
+Per-lot fields confirmed: `id` (e.g. `"31959-1"` — used verbatim as `source_lot_id`), `lotId`,
+`title`, `slug`, `department.code` (per-lot, so motorcycles in a mixed sale are excluded exactly),
+`status` (`SOLD` / `BI` = bought in / `WD` = withdrawn), `price.hammerPremium` (**not**
+`hammerPrice` — the premium-inclusive figure is what Bonhams publishes), `currency`, `hammerTime`.
+
+⚠️ **Their titles identify the individual CAR, and that wrecks model identity if left in.**
+**92.9%** of Bonhams titles append a chassis/engine/VIN clause:
+
+```
+1969 Porsche 911E Coupe Chassis no. 119200650
+2006 Mercedes-Benz SL500 VIN. WDBSK75F56F107641
+1961 Fiat OSCA 1500S Spider Chassis no. 118S 006560 Engine no. 118.000 002763
+```
+
+Those numbers are unique per vehicle, so they made every lot its own model: `model_key` came out
+as `chassis fj40 fj40940286 no.` instead of `fj40`. Measured after the harvest was scaled up —
+**7,367 of 7,378 Bonhams cars had exactly one sale and a signal of `insufficient`**, i.e. 7,731
+sales that could not contribute to any price curve. `stripIdentifierClause` in
+`resolve/resolve-car-v2.js` now cuts the title at the first `Chassis/Engine/Frame/Body/VIN no.`
+keyword; `validation/fix-identifier-clause-models.js` repaired the rows already stored.
+
+RM Sotheby's has the same habit (its slugs lead with a chassis code) — assume any classic house
+does, and check `model_key` for digits that look like a serial before trusting a harvest.
+
+Bonhams is **international**: **4,603 of 7,567 sold lots (60.8%) are GBP/EUR/CHF**, and its lots
+carry a real per-lot `country.code` (GB 4,372 · US 3,682 · FR 1,301 · BE 668 · CH 361 · ...).
+
+FX is now solved — `fx/fetch-ecb-rates.js` stores the ECB daily reference series and
+`fx/convert.js` converts at **the rate on `sold_at`**, never today's; 5,038 stored sales were
+backfilled with zero conversion failures. What that did NOT do is make those sales count:
+`engine/clean.js` has a second, independent gate, `non_us_sale`, and a London lot fails it no
+matter how correct its dollar price is. Keeping that gate is a deliberate choice (US-market
+index, matching their [V] predicate) and it costs 8,193 priced sales — see the README table.
+
+⚠️ **Do not derive `non_us_sale` from currency.** It means WHERE the lot sold. Bonhams proves the
+proxy wrong in both directions: 33 lots sold in the UAE **in USD**, and 78 sold in Great Britain
+**priced in EUR**. `bat` and `bon` read a real country field; `broadarrow`, `gooding` and `sms`
+still use the currency proxy and should be switched wherever their source exposes a country.
 
 ## PCAR Market: explicitly blocked, not just unbuilt (2026-08-17)
 

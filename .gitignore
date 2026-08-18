@@ -16,6 +16,7 @@ samples/scraped/
 samples/listings/
 samples/quarantine/
 samples/raw/
+samples/staging/
 samples/*.state.json
 
 # Crawlee's own runtime cache (request queues, key-value stores) — regenerated on
@@ -24,6 +25,7 @@ storage/
 
 # Local tool config / lock files, not project source.
 .claude/
+.playwright-mcp/
 
 *.log
 .DS_Store

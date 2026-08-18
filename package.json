@@ -14,11 +14,14 @@
     "scrape:sms": "node crawler/sms.crawler.js",
     "scrape:broadarrow": "node crawler/broadarrow.crawler.js",
     "scrape:dupont": "node crawler/dupont.crawler.js",
+    "scrape:classic": "node crawler/classic.crawler.js",
     "ingest": "node ingest/ingest.js",
     "ingest:listings": "node ingest/ingest-listings.js",
     "compute": "node jobs/nightly-compute.js",
     "api": "node api/server.js",
-    "validate": "node validation/split-audit.js && node validation/duplication-audit.js && node validation/null-attribute-splits.js"
+    "validate": "node validation/split-audit.js && node validation/duplication-audit.js && node validation/null-attribute-splits.js",
+    "scrape:bonhams": "node crawler/bonhams.crawler.js",
+    "fx": "node fx/fetch-ecb-rates.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

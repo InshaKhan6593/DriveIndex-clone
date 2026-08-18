@@ -3,157 +3,127 @@
   "id": 7,
   "name": "German",
   "state": "sold",
-  "total": 69806
+  "total": 69897
  },
  {
   "id": 3,
   "name": "American",
   "state": "sold",
-  "total": 66380
+  "total": 66497
  },
  {
   "id": 21,
   "name": "Truck & 4x4",
   "state": "sold",
-  "total": 42424
+  "total": 42499
  },
  {
   "id": 434,
   "name": "Convertibles",
   "state": "sold",
-  "total": 37703
+  "total": 37779
  },
  {
   "id": 9,
   "name": "Japanese",
   "state": "sold",
-  "total": 28657
+  "total": 28699
  },
  {
   "id": 4,
   "name": "British",
   "state": "sold",
-  "total": 22395
+  "total": 22426
  },
  {
   "id": 3,
   "name": "American",
   "state": "unsold",
-  "total": 21501
+  "total": 21538
  },
  {
   "id": 7,
   "name": "German",
   "state": "unsold",
-  "total": 16217
+  "total": 16245
  },
  {
   "id": 8,
   "name": "Italian",
   "state": "sold",
-  "total": 12780
- },
- {
-  "id": 70,
-  "name": "Motorcycles",
-  "state": "sold",
-  "total": 11658
+  "total": 12806
  },
  {
   "id": 21,
   "name": "Truck & 4x4",
   "state": "unsold",
-  "total": 10946
+  "total": 10961
  },
  {
   "id": 434,
   "name": "Convertibles",
   "state": "unsold",
-  "total": 10807
- },
- {
-  "id": 379,
-  "name": "Parts",
-  "state": "sold",
-  "total": 10119
+  "total": 10822
  },
  {
   "id": 4,
   "name": "British",
   "state": "unsold",
-  "total": 6801
+  "total": 6810
  },
  {
   "id": 9,
   "name": "Japanese",
   "state": "unsold",
-  "total": 4799
+  "total": 4804
  },
  {
   "id": 433,
   "name": "Station Wagons",
   "state": "sold",
-  "total": 4352
+  "total": 4361
  },
  {
   "id": 8,
   "name": "Italian",
   "state": "unsold",
-  "total": 3753
+  "total": 3758
  },
  {
   "id": 557,
   "name": "Right-Hand Drive",
   "state": "sold",
-  "total": 3719
+  "total": 3728
  },
  {
   "id": 10,
   "name": "Projects",
   "state": "sold",
-  "total": 3425
+  "total": 3432
  },
  {
   "id": 18,
   "name": "Swedish",
   "state": "sold",
-  "total": 2629
- },
- {
-  "id": 380,
-  "name": "Wheels",
-  "state": "sold",
-  "total": 2289
+  "total": 2634
  },
  {
   "id": 11,
   "name": "Race Cars",
   "state": "sold",
-  "total": 2285
- },
- {
-  "id": 430,
-  "name": "Minibikes & Scooters",
-  "state": "sold",
-  "total": 2103
+  "total": 2287
  },
  {
   "id": 418,
   "name": "Vans",
   "state": "sold",
-  "total": 1988
+  "total": 1992
  },
  {
   "id": 441,
   "name": "Prewar",
   "state": "sold",
-  "total": 1648
- },
- {
-  "id": 70,
-  "name": "Motorcycles",
-  "state": "unsold",
-  "total": 1278
+  "total": 1652
  },
  {
   "id": 557,
@@ -165,67 +135,55 @@
   "id": 11,
   "name": "Race Cars",
   "state": "unsold",
-  "total": 1250
- },
- {
-  "id": 428,
-  "name": "Go-Karts",
-  "state": "sold",
-  "total": 1235
+  "total": 1252
  },
  {
   "id": 436,
   "name": "RVs & Campers",
   "state": "sold",
-  "total": 1176
+  "total": 1177
  },
  {
   "id": 429,
   "name": "Hot Rods",
   "state": "sold",
-  "total": 1030
+  "total": 1035
  },
  {
   "id": 479,
   "name": "Service Vehicles",
   "state": "sold",
-  "total": 864
+  "total": 866
  },
  {
   "id": 433,
   "name": "Station Wagons",
   "state": "unsold",
-  "total": 837
+  "total": 838
  },
  {
   "id": 441,
   "name": "Prewar",
   "state": "unsold",
-  "total": 824
+  "total": 826
  },
  {
   "id": 426,
   "name": "Electric Vehicles",
   "state": "sold",
-  "total": 803
+  "total": 804
  },
  {
   "id": 6,
   "name": "French",
   "state": "sold",
-  "total": 796
+  "total": 798
  },
  {
   "id": 556,
   "name": "Kei Vehicles",
   "state": "sold",
-  "total": 698
- },
- {
-  "id": 431,
-  "name": "All-Terrain Vehicles",
-  "state": "sold",
-  "total": 693
+  "total": 700
  },
  {
   "id": 429,
@@ -243,31 +201,19 @@
   "id": 418,
   "name": "Vans",
   "state": "unsold",
-  "total": 608
+  "total": 611
  },
  {
   "id": 436,
   "name": "RVs & Campers",
   "state": "unsold",
-  "total": 480
- },
- {
-  "id": 383,
-  "name": "Boats",
-  "state": "sold",
-  "total": 422
+  "total": 482
  },
  {
   "id": 18,
   "name": "Swedish",
   "state": "unsold",
-  "total": 341
- },
- {
-  "id": 432,
-  "name": "Tractors",
-  "state": "sold",
-  "total": 324
+  "total": 340
  },
  {
   "id": 415,
@@ -279,25 +225,19 @@
   "id": 10,
   "name": "Projects",
   "state": "unsold",
-  "total": 299
+  "total": 301
  },
  {
   "id": 6,
   "name": "French",
   "state": "unsold",
-  "total": 257
+  "total": 258
  },
  {
   "id": 426,
   "name": "Electric Vehicles",
   "state": "unsold",
   "total": 233
- },
- {
-  "id": 379,
-  "name": "Parts",
-  "state": "unsold",
-  "total": 229
  },
  {
   "id": 82,
@@ -312,22 +252,16 @@
   "total": 202
  },
  {
-  "id": 479,
-  "name": "Service Vehicles",
-  "state": "unsold",
-  "total": 148
- },
- {
   "id": 498,
   "name": "Canadian",
   "state": "sold",
-  "total": 147
+  "total": 148
  },
  {
-  "id": 383,
-  "name": "Boats",
+  "id": 479,
+  "name": "Service Vehicles",
   "state": "unsold",
-  "total": 83
+  "total": 147
  },
  {
   "id": 499,
@@ -339,19 +273,13 @@
   "id": 498,
   "name": "Canadian",
   "state": "unsold",
-  "total": 49
+  "total": 50
  },
  {
   "id": 82,
   "name": "Spanish",
   "state": "unsold",
   "total": 48
- },
- {
-  "id": 553,
-  "name": "Side-by-Sides",
-  "state": "sold",
-  "total": 45
  },
  {
   "id": 542,
@@ -366,34 +294,10 @@
   "total": 40
  },
  {
-  "id": 430,
-  "name": "Minibikes & Scooters",
-  "state": "unsold",
-  "total": 40
- },
- {
-  "id": 432,
-  "name": "Tractors",
-  "state": "unsold",
-  "total": 40
- },
- {
-  "id": 431,
-  "name": "All-Terrain Vehicles",
-  "state": "unsold",
-  "total": 34
- },
- {
   "id": 499,
   "name": "Brazilian",
   "state": "unsold",
   "total": 26
- },
- {
-  "id": 428,
-  "name": "Go-Karts",
-  "state": "unsold",
-  "total": 25
  },
  {
   "id": 556,
@@ -406,18 +310,6 @@
   "name": "Dutch",
   "state": "sold",
   "total": 18
- },
- {
-  "id": 380,
-  "name": "Wheels",
-  "state": "unsold",
-  "total": 16
- },
- {
-  "id": 553,
-  "name": "Side-by-Sides",
-  "state": "unsold",
-  "total": 14
  },
  {
   "id": 496,
@@ -436,18 +328,6 @@
   "name": "Dutch",
   "state": "unsold",
   "total": 5
- },
- {
-  "id": 544,
-  "name": "Trains",
-  "state": "sold",
-  "total": 5
- },
- {
-  "id": 544,
-  "name": "Trains",
-  "state": "unsold",
-  "total": 1
  },
  {
   "id": 415,

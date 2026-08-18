@@ -20,36 +20,66 @@ responses and rendered pages, where every claim carries an evidence class (`[V]`
 
 | | ours | DriveIndex |
 |---|---|---|
-| sales | **209,928** | 110,043 |
-| **listings (for-sale now)** | **4,975** (4,958 active) | ~35,309 |
-| cars | 55,934 | 7,148 (model+generation ranges) |
-| **sales per car** | **3.82** | — |
-| cars with repeat sales | 22,495 | — |
-| distinct makes | 357 | 84 |
+| sales | **219,512** | 110,043 |
+| **listings (for-sale now)** | **5,043** (5,026 active) | ~35,309 |
+| cars | 61,773 | 7,148 (model+generation ranges) |
+| **sales per car** | **3.55** | — |
+| cars with repeat sales | 23,603 | — |
+| distinct makes | 376 | 84 |
 | date range | 2014-07-30 → 2026-08-16 | — |
-| review queue | 27,238 (13.0%) | none — they ingest everything |
+| review queue | 28,764 (10.5%) | none — they ingest everything |
 
 Sources with **sales** — **8 of 13**, and the top 4 are DriveIndex's #1–#4, carrying **~90% of
 their measured source mix**:
 
 | source | sales | their mix |
 |---|---|---|
-| Bring a Trailer | 162,012 | 72.2% |
-| Cars & Bids | 35,609 | 5.5% |
-| Mecum | 7,300 | 6.4% |
-| RM Sotheby's | 2,676 | 6.2% |
-| Gooding & Company | 2,030 | not in their mix (they don't carry it) |
-| Broad Arrow | 252 | not in their mix |
+| Bring a Trailer | 162,313 | 72.2% |
+| Cars & Bids | 35,766 | 5.5% |
+| **Bonhams** | **8,956** | 3.4% |
+| Mecum | 7,309 | 6.4% |
+| RM Sotheby's | 2,749 | 6.2% |
+| Gooding & Company | 2,043 | not in their mix (they don't carry it) |
+| Broad Arrow | 351 | not in their mix |
 | Sotheby's Motorsport | 25 (partial — see below) | not in their mix |
-| Bonhams | 24 (sample) | 3.4% |
+
+> Bonhams went 496 → 8,956 on 2026-08-18 after three bugs were fixed in its harvester: auction
+> pages server-render only the first 48 lots (67 of 113 car auctions had yielded *nothing*),
+> 72 sitemap ids were retried forever because they 308 to Bonhams' partner houses, and 92.9% of
+> its titles append `Chassis no. …`, which was going into `model_key` and making every lot its
+> own model. See `notes/source-registry.md`. **60.8% of its sold lots are GBP/EUR/CHF.** Those
+> now carry a correct `price_usd` (ECB rate for the day they sold, `fx/`), but they are still
+> excluded from the maths — deliberately, because they sold outside the US. See below.
+
+### This is a US-market index, and that is a choice
+
+`engine/clean.js` applies two independent gates. The first, "is this price comparable at all",
+**was a defect** and is fixed: DriveIndex ingests 10 currencies and computes on 1, so a €10M
+Ferrari was shown to the user as evidence and silently ignored by the maths. `price_usd` is now
+populated at ingest from the ECB reference rate **for the day the lot sold** — not today's rate,
+which would inject years of FX drift into every trend.
+
+The second gate, `non_us_sale`, is **kept on purpose**: a Paris or London result is a different
+buyer pool, tax treatment and fee structure. Measured cost of that choice, so it is an informed
+one rather than an accident:
+
+| | |
+|---|---|
+| priced, comparable sales excluded | **8,193** (bon 3,888 · bat 3,158 · rms 900 · good 145 · broadarrow 102) |
+| cars that would newly reach 3+ clean sales | 433 |
+| cars reporting "insufficient" that do have priced overseas sales | 4,237 |
+
+The flag is **not** a currency proxy — 5,606 USD-denominated sales are flagged non-US from real
+country data, and Bonhams alone sold 33 lots in the UAE in dollars. Adapters that still derive
+it from currency alone are wrong in both directions; `bat` and `bon` read a real country field.
 
 Sources with **listings** — asking-price inventory, a separate table from `sale` and never
 mixed into it:
 
 | source | listings | what they are |
 |---|---|---|
-| DuPont Registry | 4,786 | dealer/private asking prices (no auction) |
-| Broad Arrow | 172 | upcoming-auction consignments, price = estimate midpoint |
+| DuPont Registry | 4,852 | dealer/private asking prices (no auction) |
+| Broad Arrow | 174 | upcoming-auction consignments, price = estimate midpoint |
 | RM Sotheby's | 17 | upcoming consignments |
 
 **Verified at this scale:** 0 hard splits · 0 duplicate lot keys · 0 same-physical-car
@@ -196,14 +226,38 @@ inner-joined `sale`, so **1,008 cars with live listings but no sales got no valu
 all** (their pages rendered blank). Both fixed: `listings_count` now sums to 4,958, exactly
 matching active listings with a resolved car, and 0 cars are missing a row.
 
+### The single biggest quality constraint: BaT publishes no mileage
+
+Worth separating from the list below, because it is not a bug in the engine — it is a hole in
+the input that the engine cannot compensate for.
+
+| source | share of corpus | sales with mileage |
+|---|---|---|
+| **Bring a Trailer** | **74%** | **0%** |
+| Cars & Bids | 16% | **100%** |
+| everything else | 10% | ~0% |
+| **corpus overall** | | **16.3%** |
+
+`engine/signal.js` mileage-adjusts every price before fitting a trend, and a sale with no
+odometer falls back to `ctx.avgMiles` — it is treated as **average for its car**. That is the
+safe default (it applies no adjustment) but it means that for roughly three quarters of the
+corpus a 5,000-mile car and a 150,000-mile car of the same model are compared like for like.
+For scale, the adjustment moves a delivery-mile example **+30%** against a 60k-mile one.
+
+The number exists — it is on BaT's **lot page**, not the list API that
+`crawler/bat-partitioned.crawler.js` reads. Closing it costs one extra request per lot against
+162k lots, so it wants to run newest-first and incrementally, the same shape as the Bonhams
+repair queue. See `notes/source-registry.md` → "What is left to build".
+
 ### Known-wrong, not yet fixed
 
 Found by the same audit, lower severity — none produce visibly false claims, but they quietly
 distort numbers:
 
-- **The mileage anchor is unreliable.** `avgMileage` normalises every price, but of 300 sampled
-  cars with ≥10 sales, **136 (45%) have zero clean sales reporting mileage** and fall back to a
-  hardcoded 50,000; another 64 anchor the entire model's curve on 1–2 reported values.
+- **The mileage anchor is unreliable** (the consequence of the above). `avgMileage` normalises
+  every price, but of 300 sampled cars with ≥10 sales, **136 (45%) have zero clean sales
+  reporting mileage** and fall back to a hardcoded 50,000; another 64 anchor the entire model's
+  curve on 1–2 reported values.
 - **Recency weighting flattens.** `Math.max(1, round(w*10))` means everything **≥3 years old is
   weighted identically** — a 4-year-old sale counts the same as a 30-year-old one.
 - **`volatilityOf()` is fed raw prices** while its own docstring says mileage-normalised, so
@@ -533,10 +587,18 @@ node crawler/gooding.crawler.js run            # resumes by auction, 45-day rech
 node crawler/sms.crawler.js                    # two fixed fetches every run — see source writeup for why
 node crawler/broadarrow.crawler.js [eventCode] # one closed event at a time, 10s crawl-delay honored
 node crawler/dupont.crawler.js [sitemapN] [max]# LISTINGS, not sales — see source writeup
+node crawler/bonhams.crawler.js [budget]       # resumes by auction id; repairs before exploring
+node fx/fetch-ecb-rates.js          # REQUIRED ON A FRESH CLONE, before the first ingest
 node ingest/ingest.js               # samples/scraped/*.json -> `sale`
 node ingest/ingest-listings.js      # samples/listings/*.json -> `listing`
 node jobs/nightly-compute.js
 ```
+
+`data/` is gitignored, so a fresh clone has **no FX rate table** until `fx/fetch-ecb-rates.js`
+runs — it downloads the ECB daily reference series (~670 KB) that `ingest` uses to stamp
+`price_usd`. `jobs/cron.js` runs it automatically as the `fx` stage, ordered before `ingest`;
+only a manual first run needs it invoked by hand. Without it every non-USD sale ingests with
+`price_usd = null` rather than a wrong number — `fx/convert.js` never guesses.
 
 ### API and frontend
 

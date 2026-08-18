@@ -20,6 +20,17 @@ const STAGES = [
   // Broad Arrow honours a 10s crawl-delay, so its budget buys ~6 lots per minute, not per second.
   { name: "scrape:broadarrow", cmd: ["crawler/broadarrow.crawler.js", "auto"], budget: 60 * MINUTES, optional: true },
   { name: "scrape:dupont", cmd: ["crawler/dupont.crawler.js", "auto", "999"], budget: 45 * MINUTES, optional: true },
+  // Bonhams was harvested by hand and never scheduled, so it stopped growing the moment nobody
+  // ran it — 8.5k of its 11.3k sitemap auctions were still unvisited. The argument is an AUCTION
+  // budget, not a time budget: at ~1.3s per auction (a self-imposed delay, plus extra requests
+  // on the multi-page car sales) 1200 fits inside the 45 minutes below with room to spare. The
+  // crawler resumes from its own state file, so each run continues where the last one stopped.
+  { name: "scrape:bonhams", cmd: ["crawler/bonhams.crawler.js", "1200"], budget: 45 * MINUTES, optional: true },
+  // MUST run before ingest: ingest stamps price_usd from this table, and a sale dated after the
+  // last row in it converts to null and silently falls out of the maths. Optional because a
+  // stale table still converts every historical sale correctly — only the newest days are
+  // affected — so an ECB outage should not fail the run.
+  { name: "fx", cmd: ["fx/fetch-ecb-rates.js"], budget: 5 * MINUTES, optional: true },
   { name: "ingest", cmd: ["ingest/ingest.js"], budget: 45 * MINUTES, optional: false },
   // Was missing entirely: listings were harvested to samples/listings/ and never loaded, so
   // every listing-dependent feature (for-sale counts, Deal Radar, liquidity) silently ran on
