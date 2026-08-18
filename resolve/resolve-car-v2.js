@@ -222,6 +222,24 @@ function extractBodyStyle(tokens) {
   return null;
 }
 
+/**
+ * Body style named by a listing URL's own slug, or null.
+ *
+ * Path only — the host and query string are ignored. Requires EXACTLY one distinct body style
+ * in the slug: two means the slug is ambiguous and no answer is better than a guess.
+ */
+function bodyStyleFromSlug(url) {
+  if (!url) return null;
+  let path;
+  try { path = new URL(String(url), "https://x.invalid").pathname; }
+  catch { return null; }
+  const found = new Set();
+  for (const tok of path.toLowerCase().split(/[^a-z0-9]+/)) {
+    if (tok && BODY_STYLES.has(tok)) found.add(BODY_STYLES.get(tok));
+  }
+  return found.size === 1 ? [...found][0] : null;
+}
+
 function extractGeneration(tokens) {
   for (let i = 0; i < tokens.length; i++) {
     const bare = tokens[i].replace(/[^A-Za-z0-9]/g, "").toUpperCase();
@@ -477,6 +495,22 @@ function parseTitle(rawTitle, ctx = {}) {
   const bodyInfo = extractBodyStyle(tokens);
   if (bodyInfo) tokens = tokens.filter((_, i) => i !== bodyInfo.index);
 
+  // BODY STYLE FROM THE URL SLUG — only when the title never said one.
+  //
+  // Auction houses write titles for drama but generate slugs from their own structured record,
+  // so the slug often names the body style the title omits ("1990 BMW 325i 5-speed" on
+  // /listing/1990-bmw-325i-coupe/). Backtested against 82,132 sales whose title DOES state a
+  // body style: where the slug names exactly one, it agrees 99.7% of the time (47,375 of
+  // 47,526), and per-source it is 100% on mecum/bon/rms/good/broadarrow, 99.5% on bat.
+  //
+  // ONLY the body style is taken, never make or model — the same restriction the year fallback
+  // already carries, and for the same measured reason: a slug can name a different car
+  // ("Ferrari 212 Barchetta Re-Creation" on .../1965-ferrari-330gt-6/).
+  //
+  // Exactly one match is required. A slug naming two body words is ambiguous, and guessing
+  // between them is what this whole gate exists to prevent.
+  const slugBody = bodyInfo ? null : bodyStyleFromSlug(ctx.url);
+
   const dispInfo = extractDisplacement(tokens);
   if (dispInfo) tokens = tokens.filter((_, i) => i !== dispInfo.index);
 
@@ -499,7 +533,8 @@ function parseTitle(rawTitle, ctx = {}) {
     make: makeInfo.make,
     modelDisplay: tokens.join(" "),   // human-readable, original order
     modelKey,                          // canonical, sorted — the identity key
-    bodyType: bodyInfo ? bodyInfo.body : null,
+    bodyType: bodyInfo ? bodyInfo.body : (slugBody || null),
+    bodyTypeFromSlug: bodyInfo ? false : Boolean(slugBody),
     displacement: dispInfo ? dispInfo.displacement : null,
     generation: genInfo ? genInfo.generation : null,
     transmissionSpeeds: transmission ? transmission.speeds : null,
