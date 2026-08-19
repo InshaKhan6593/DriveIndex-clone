@@ -192,9 +192,21 @@ for (const table of TABLES) {
   const BATCH = 1000;
   for (let i = 0; i < changed.length; i += BATCH) {
     const slice = changed.slice(i, i + BATCH);
-    remote.transaction(() => {
-      for (const row of slice) insert.run(...cols.map((c) => row[c]));
-    })();
+    remote.exec("BEGIN");
+    try {
+      for (let j = 0; j < slice.length; j++) {
+        try {
+          insert.run(...cols.map((c) => slice[j][c]));
+        } catch (err) {
+          throw new Error(`${table} row ${i + j} failed: ${err.message || err}`, { cause: err });
+        }
+      }
+      remote.exec("COMMIT");
+    } catch (err) {
+      // Preserve the insert error when the remote driver has already ended the transaction.
+      try { remote.exec("ROLLBACK"); } catch { /* already rolled back by the driver */ }
+      throw err;
+    }
     process.stdout.write(`\r${table.padEnd(22)} ${Math.min(i + BATCH, changed.length)}/${changed.length}   `);
   }
 
@@ -211,9 +223,14 @@ for (const table of TABLES) {
 // on the first day a car was ever retired, and aborted the whole load.
 for (const job of pendingDeletes.reverse()) {
   const del = remote.prepare(`DELETE FROM "${job.table}" WHERE "${job.pk}" = ?`);
-  remote.transaction(() => {
+  remote.exec("BEGIN");
+  try {
     for (const id of job.ids) del.run(id);
-  })();
+    remote.exec("COMMIT");
+  } catch (err) {
+    try { remote.exec("ROLLBACK"); } catch { /* already rolled back by the driver */ }
+    throw err;
+  }
   console.log(`deleted ${String(job.ids.length).padStart(7)} from ${job.table}`);
 }
 
