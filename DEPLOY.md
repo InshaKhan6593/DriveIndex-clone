@@ -317,6 +317,27 @@ node db/export-serving.js
 Then attach `data/serving.sqlite` to the `data-latest` release (replacing the existing asset) and
 hit the Render deploy hook, or just let the next scheduled run do both.
 
+## Region pinning — why `iad1` is in both vercel.json files
+
+Recorded here because it cannot be recorded where it belongs: `vercel.json` is validated against
+a schema with `additionalProperties: false`, so a `_comment` key fails the deploy with
+*"should NOT have additional property"*. JSON has no comments, so this is the note.
+
+Both [vercel.json](vercel.json) (API) and [web/vercel.json](web/vercel.json) (frontend) pin
+`"regions": ["iad1"]`, and the Turso database is in `aws-us-east-1`. All three are the same
+metro — Northern Virginia — on purpose.
+
+The reason is the query pattern, not where anyone lives. `/api/cars/:id` issues **6 separate
+database queries**; the whole API makes 26 across its routes. Every millisecond between the
+function and the database is paid per query, so ~70 ms of cross-country distance is ~420 ms of
+dead time on one page load. The visitor's own distance is paid once, and static assets come from
+whichever CDN edge is nearest them regardless of this setting.
+
+**If you ever move the database, move all three together.** Turso `sjc` with Vercel `sfo1`, or
+Turso `iad` with Vercel `iad1`. A split pair is the worst case and it fails silently — the site
+still works, it is just slow, and nothing reports it. Hobby plans allow exactly one region, so
+there is no hedging.
+
 ## Notes
 
 * Free Render services sleep when idle — the first request after a quiet period takes ~1 minute.

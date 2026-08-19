@@ -1,7 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm install --omit=dev",
-  "_comment_regions": "MUST match the Turso database region. A car detail page issues 6 separate queries, so every 70ms of distance between this function and the database costs ~420ms per page load. iad1 (Washington DC) pairs with Turso's iad (Ashburn, VA) - the same metro. If the database is ever moved to sjc, change this to sfo1 in the same commit. Hobby plans allow exactly one region, so this is a real choice, not a preference.",
   "regions": ["iad1"],
   "functions": {
     "api/index.js": {
