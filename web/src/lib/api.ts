@@ -1,4 +1,11 @@
-const API_URL = process.env.API_URL || "http://localhost:3000";
+const SERVER_API_URL = process.env.API_URL || "http://localhost:3000";
+// API_URL is server-only in Next.js. Client components need the explicitly public value; without
+// it, a browser request must stay same-origin rather than silently targeting localhost.
+const BROWSER_API_URL = process.env.NEXT_PUBLIC_API_URL || "";
+
+function apiUrl(path: string) {
+  return `${typeof window === "undefined" ? SERVER_API_URL : BROWSER_API_URL}${path}`;
+}
 
 export type CarSummary = {
   id: string;
@@ -28,7 +35,7 @@ export async function fetchCars(params: Record<string, string | undefined>): Pro
   for (const [k, v] of Object.entries(params)) {
     if (v) qs.set(k, v);
   }
-  const res = await fetch(`${API_URL}/api/cars?${qs.toString()}`, { cache: "no-store" });
+  const res = await fetch(apiUrl(`/api/cars?${qs.toString()}`), { cache: "no-store" });
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json();
 }
@@ -106,7 +113,7 @@ export type CarDetail = {
 };
 
 export async function fetchCarDetail(id: string): Promise<CarDetail | null> {
-  const res = await fetch(`${API_URL}/api/cars/${id}?tier=collector`, { cache: "no-store" });
+  const res = await fetch(apiUrl(`/api/cars/${id}?tier=collector`), { cache: "no-store" });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json();
@@ -128,7 +135,7 @@ export type TrendingResponse = {
 };
 
 export async function fetchTrending(): Promise<TrendingResponse> {
-  const res = await fetch(`${API_URL}/api/trending`, { cache: "no-store" });
+  const res = await fetch(apiUrl("/api/trending"), { cache: "no-store" });
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json();
 }
@@ -141,7 +148,7 @@ export type Deal = {
 };
 
 export async function fetchDeals(): Promise<{ total: number; rejectedAsUnverifiable: number; deals: Deal[] }> {
-  const res = await fetch(`${API_URL}/api/deals`, { cache: "no-store" });
+  const res = await fetch(apiUrl("/api/deals"), { cache: "no-store" });
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json();
 }
@@ -162,19 +169,19 @@ export type CompareCar = {
 
 export async function fetchCompare(ids: string[]): Promise<{ cars: CompareCar[] }> {
   if (!ids.length) return { cars: [] };
-  const res = await fetch(`${API_URL}/api/compare?ids=${ids.join(",")}`, { cache: "no-store" });
+  const res = await fetch(apiUrl(`/api/compare?ids=${ids.join(",")}`), { cache: "no-store" });
   if (!res.ok) throw new Error(`API error ${res.status}`);
   return res.json();
 }
 
 export async function searchCars(q: string): Promise<{ results: { id: string; year: number; make: string; model: string; current_value: number | null; sales_count: number }[] }> {
-  const res = await fetch(`${API_URL}/api/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+  const res = await fetch(apiUrl(`/api/search?q=${encodeURIComponent(q)}`), { cache: "no-store" });
   if (!res.ok) return { results: [] };
   return res.json();
 }
 
 export async function fetchReprice(id: string, miles: number): Promise<number | null> {
-  const res = await fetch(`${API_URL}/api/cars/${id}/reprice?miles=${miles}`, { cache: "no-store" });
+  const res = await fetch(apiUrl(`/api/cars/${id}/reprice?miles=${miles}`), { cache: "no-store" });
   if (!res.ok) return null;
   const data = await res.json();
   return data.value;

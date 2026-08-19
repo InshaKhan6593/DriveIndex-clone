@@ -49,10 +49,8 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"div">) 
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Card>
         <CardHeader>
-          <CardTitle>
-            Drive<span className="text-muted-foreground">Index</span>
-          </CardTitle>
-          <CardDescription>Enter your access code to continue</CardDescription>
+          <CardTitle className="text-xl font-semibold tracking-tight">Access code</CardTitle>
+          <CardDescription>Enter your DriveIndex access code to continue</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit}>
@@ -60,16 +58,17 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"div">) 
               <Field>
                 <FieldLabel htmlFor="code">Access code</FieldLabel>
                 <Input
-                  id="code"
-                  autoFocus
-                  autoComplete="off"
-                  placeholder="••••-••••"
-                  className="font-mono tracking-wider"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  required
-                />
-                {error && <p className="text-sm text-destructive">{error}</p>}
+                    id="code"
+                    autoFocus
+                    autoComplete="off"
+                    placeholder="••••-••••"
+                    className="font-mono tracking-wider focus-visible:border-foreground focus-visible:ring-2 focus-visible:ring-foreground/60"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    aria-invalid={!!error}
+                    required
+                  />
+                {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
               </Field>
               <Field>
                 <Button type="submit" disabled={loading || !code}>

@@ -37,6 +37,7 @@
 const fs = require("fs");
 const path = require("path");
 const { DatabaseSync } = require("node:sqlite");
+const { createClient } = require("@libsql/client");
 
 const NEW = process.argv[2] || path.join(__dirname, "..", "data", "serving.sqlite");
 const PREV = process.argv[3] || null;
@@ -68,20 +69,14 @@ if (hasPrev) {
   console.log("no previous snapshot — pushing everything (first load)");
 }
 
-const Database = require("libsql");
-const remote = new Database(URL, { authToken: TOKEN });
-
-function sqlLiteral(value) {
-  if (value == null) return "NULL";
-  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "NULL";
-  if (typeof value === "bigint") return String(value);
-  return `'${String(value).replace(/'/g, "''")}'`;
-}
-
 // The remote database may be empty on a first run. schema.sql is the one definition of the shape,
 // so it is replayed rather than duplicated here — CREATE TABLE IF NOT EXISTS makes it a no-op
 // afterwards. Statements are split on semicolons at line ends to keep CHECK constraints intact.
 const schema = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
+
+async function loadRemote() {
+const remote = createClient({ url: URL, authToken: TOKEN });
+
 for (const stmt of schema.split(/;\s*\n/)) {
   // The first schema statement is preceded by documentation comments. Strip full-line SQL
   // comments before checking whether the chunk is empty, otherwise CREATE TABLE car is skipped
@@ -89,7 +84,7 @@ for (const stmt of schema.split(/;\s*\n/)) {
   const s = stmt.split(/\r?\n/).filter((line) => !line.trim().startsWith("--")).join("\n").trim();
   if (!s) continue;
   try {
-    remote.exec(s + ";");
+    await remote.execute(s + ";");
   } catch (err) {
     // A generated column or an index that already exists is expected on every run after the first.
     if (!/already exists|duplicate/i.test(String(err.message))) {
@@ -104,11 +99,14 @@ for (const stmt of schema.split(/;\s*\n/)) {
 // serving snapshot, even though data-latest exists from before Turso was configured.
 let usePreviousSnapshot = Boolean(hasPrev);
 if (usePreviousSnapshot) {
-  const remoteCounts = TABLES.map((table) => remote.prepare(`SELECT COUNT(*) n FROM "${table}"`).get().n);
+  const remoteCounts = await Promise.all(TABLES.map(async (table) => {
+    const result = await remote.execute(`SELECT COUNT(*) n FROM "${table}"`);
+    return Number(result.rows[0].n);
+  }));
   const previousCounts = TABLES.map((table) => src.prepare(`SELECT COUNT(*) n FROM prev."${table}"`).get().n);
   if (remoteCounts.some((count, i) => count !== previousCounts[i])) {
     console.log(`remote counts ${remoteCounts.join(",")} do not match previous snapshot ${previousCounts.join(",")} - resetting remote tables and pushing a full snapshot`);
-    for (const table of [...TABLES].reverse()) remote.exec(`DELETE FROM "${table}"`);
+    for (const table of [...TABLES].reverse()) await remote.execute(`DELETE FROM "${table}"`);
     usePreviousSnapshot = false;
   }
 }
@@ -189,15 +187,17 @@ for (const table of TABLES) {
   // foreign key. (Found the hard way: the obvious per-table loop deletes parents before children.)
   if (deletedIds.length) pendingDeletes.push({ table, pk, ids: deletedIds });
 
-  // The remote libSQL driver does not keep transactions open across separate calls. Use one
-  // multi-row INSERT per batch instead: it is atomic at the statement level and avoids one
-  // network round trip per row on the first load.
+  // Turso's supported client batch API executes these statements in one implicit write
+  // transaction, so a failed batch is rolled back without manual transaction control.
   const BATCH = 250;
   for (let i = 0; i < changed.length; i += BATCH) {
     const slice = changed.slice(i, i + BATCH);
-    const values = slice.map((row) => `(${cols.map((c) => sqlLiteral(row[c])).join(", ")})`).join(",\n");
+    const statements = slice.map((row) => ({
+      sql: `INSERT OR REPLACE INTO "${table}" (${colList}) VALUES (${cols.map(() => "?").join(", ")})`,
+      args: cols.map((c) => row[c] ?? null),
+    }));
     try {
-      remote.exec(`INSERT OR REPLACE INTO "${table}" (${colList}) VALUES\n${values};`);
+      await remote.batch(statements, "write");
     } catch (err) {
       throw new Error(`${table} rows ${i}-${i + slice.length - 1} failed: ${err.message || err}`, { cause: err });
     }
@@ -217,9 +217,12 @@ for (const table of TABLES) {
 // on the first day a car was ever retired, and aborted the whole load.
 for (const job of pendingDeletes.reverse()) {
   for (let i = 0; i < job.ids.length; i += 250) {
-    const ids = job.ids.slice(i, i + 250).map(sqlLiteral).join(", ");
+    const statements = job.ids.slice(i, i + 250).map((id) => ({
+      sql: `DELETE FROM "${job.table}" WHERE "${job.pk}" = ?`,
+      args: [id],
+    }));
     try {
-      remote.exec(`DELETE FROM "${job.table}" WHERE "${job.pk}" IN (${ids});`);
+      await remote.batch(statements, "write");
     } catch (err) {
       throw new Error(`${job.table} deletions ${i}-${Math.min(i + 249, job.ids.length - 1)} failed: ${err.message || err}`, { cause: err });
     }
@@ -227,7 +230,8 @@ for (const job of pendingDeletes.reverse()) {
   console.log(`deleted ${String(job.ids.length).padStart(7)} from ${job.table}`);
 }
 
-const remoteCars = remote.prepare("SELECT COUNT(*) n FROM car").get().n;
+const remoteResult = await remote.execute("SELECT COUNT(*) n FROM car");
+const remoteCars = Number(remoteResult.rows[0].n);
 const localCars = src.prepare("SELECT COUNT(*) n FROM main.car").get().n;
 
 console.log(`\ntotal: ${totalWrites} rows written, ${totalDeletes} deleted`);
@@ -242,3 +246,9 @@ if (remoteCars !== localCars) {
   process.exit(1);
 }
 console.log("remote matches the snapshot");
+}
+
+loadRemote().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

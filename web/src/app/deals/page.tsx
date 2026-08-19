@@ -81,7 +81,7 @@ export default async function DealsPage() {
                   </div>
 
                   {d.url && (
-                    <Button variant="outline" size="sm" render={<a href={d.url} target="_blank" rel="noopener noreferrer" />}>
+                    <Button nativeButton={false} variant="outline" size="sm" render={<a href={d.url} target="_blank" rel="noopener noreferrer" />}>
                       View
                     </Button>
                   )}

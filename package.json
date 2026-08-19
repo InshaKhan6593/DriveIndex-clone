@@ -24,6 +24,7 @@
     "fx": "node fx/fetch-ecb-rates.js"
   },
   "dependencies": {
+    "@libsql/client": "^0.17.4",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "libsql": "^0.5.29"
