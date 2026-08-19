@@ -2,5 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "buildCommand": "npm run build",
-  "installCommand": "npm install"
+  "installCommand": "npm install",
+  "_comment_regions": "Pinned to match the API project (root vercel.json) and the Turso region. Pages are server-rendered here and fetch the API over HTTP, so a split between this and the API adds a cross-country hop to every page. Static assets still come from the CDN edge nearest the visitor regardless of this setting - this only places the render.",
+  "regions": ["iad1"]
 }

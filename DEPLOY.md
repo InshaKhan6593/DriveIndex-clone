@@ -114,7 +114,16 @@ harvest is 190 MB raw and 16 MB compressed.
 
 Sign up at **https://turso.tech** (GitHub login, no card). Then:
 
-1. **Create a database** — any name, e.g. `driveindex`. Pick the region closest to you.
+1. **Create a database** — any name, e.g. `driveindex`. **Region: `iad` (Ashburn, Virginia).**
+
+   ⚠️ Not "closest to you", and not closest to the client either — **closest to the API**.
+   Vercel Functions default to `iad1` (Washington DC) and Hobby plans get exactly one region, so
+   `iad` puts the database in the same metro as the code querying it. A car detail page issues
+   **6 separate queries**; at cross-country latency that is ~420ms of pure waiting per page, and
+   next door it is single digits. Both `vercel.json` files pin `iad1` to keep the pair together.
+
+   If you ever need US West instead, move BOTH: Turso `sjc` and Vercel `sfo1`. Splitting them is
+   the worst of both.
 2. On its page, copy the **Database URL**. It looks like `libsql://driveindex-<you>.turso.io`.
 3. **Create a token** for it (Turso calls this an auth token / database token). Copy it — it is
    shown once.
