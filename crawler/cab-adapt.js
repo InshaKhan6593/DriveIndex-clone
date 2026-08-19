@@ -17,6 +17,10 @@ function parseMileage(raw) {
   if (!m) return { miles: null, note: s.trim() || null };
   const n = Number(m[1].replace(/,/g, ""));
   if (!Number.isFinite(n)) return { miles: null, note: s.trim() || null };
+  // "0 Miles" is a placeholder, not an odometer — a real 0 would price the car as a
+  // delivery-mile example and distort every mileage adjustment. Null = unknown, the safe
+  // default the engine already handles. (7 such rows were found stored and cleaned up.)
+  if (n === 0) return { miles: null, note: "zero odometer — placeholder" };
   // Normalise to miles; the engine's mileage curve is defined in miles and mixing units would
   // silently distort every adjustment.
   const isKm = /kilometer|km/i.test(m[2]);

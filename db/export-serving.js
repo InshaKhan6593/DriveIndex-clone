@@ -32,8 +32,24 @@ if (!fs.existsSync(SRC)) {
   console.error(`no working database at ${SRC}`);
   process.exit(1);
 }
-fs.rmSync(OUT, { force: true });
-fs.rmSync(`${OUT}-journal`, { force: true });
+// On Windows an open SQLite handle locks the file, so a running API server holding the previous
+// snapshot makes this fail with EBUSY and a raw stack trace. Say what is actually wrong.
+for (const f of [OUT, `${OUT}-journal`]) {
+  try {
+    fs.rmSync(f, { force: true });
+  } catch (err) {
+    if (err.code !== "EBUSY" && err.code !== "EPERM") throw err;
+    console.error(`
+cannot replace ${f} — a process still has it open.`);
+    console.error("Something is serving this snapshot. Stop it and re-run:");
+    console.error("  PowerShell:  Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" |");
+    console.error("                 Where-Object { $_.CommandLine -like '*api/server.js*' } |");
+    console.error("                 Select-Object ProcessId, CommandLine");
+    console.error("               then: Stop-Process -Id <pid> -Force
+");
+    process.exit(1);
+  }
+}
 
 const db = new DatabaseSync(SRC);
 

@@ -41,6 +41,11 @@ function statusOf(rec) {
 
 function insertSale(db, carId, rec) {
   const vinNormal = rec.vin_raw ? normalizeVin(rec.vin_raw) : null;
+  // Upsert refreshes the live fields (price/date/status) unconditionally, and the
+  // detail-page-enrichment fields (mileage/vin/color/transmission) only when the incoming
+  // record actually has one — COALESCE keeps the stored value otherwise, so a later re-scrape
+  // of the list API (which carries none of them) never wipes enrichment written by
+  // crawler/bat-detail.crawler.js back off the row.
   db.prepare(
     `INSERT INTO sale
      (id, car_id, source, source_lot_id, url, title, sold_at, price, currency, price_usd,
@@ -48,7 +53,12 @@ function insertSale(db, carId, rec) {
       is_outlier, outlier_note, carfax_damage, non_us_sale, status)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(source, source_lot_id) DO UPDATE SET
-       price = excluded.price, sold_at = excluded.sold_at, status = excluded.status`
+       price = excluded.price, sold_at = excluded.sold_at, status = excluded.status,
+       mileage = COALESCE(excluded.mileage, mileage),
+       vin = COALESCE(excluded.vin, vin),
+       vin_normal = COALESCE(excluded.vin_normal, vin_normal),
+       color = COALESCE(excluded.color, color),
+       transmission = COALESCE(excluded.transmission, transmission)`
   ).run(
     newId(), carId, rec.source, rec.source_lot_id, rec.url, rec.title,
     rec.sold_at || new Date().toISOString(), rec.price || 0, rec.currency || "USD", rec.price_usd,
@@ -78,7 +88,8 @@ function ingestRecord(db, rec, stats) {
   //
   // Idempotent is supposed to mean "safe to re-run, converges to no-op" — this makes it true:
   // once a lot has a sale row, re-ingesting it only ever refreshes price/date/status (the same
-  // fields insertSale's own ON CONFLICT already updates), never re-resolves or re-queues it.
+  // fields insertSale's own ON CONFLICT updates, plus detail-page enrichment fields when the
+  // incoming record carries them), never re-resolves or re-queues it.
   if (rec.source_lot_id) {
     const existing = db.prepare("SELECT car_id FROM sale WHERE source = ? AND source_lot_id = ?").get(rec.source, rec.source_lot_id);
     if (existing) {
@@ -271,7 +282,7 @@ function ingestFiles(db, files) {
 
 function printReport(stats) {
   console.log(`\n=== INGESTION REPORT ===`);
-  if (stats.alreadyIngested) console.log(`Already ingested (refreshed price/date/status only, not re-resolved): ${stats.alreadyIngested}`);
+  if (stats.alreadyIngested) console.log(`Already ingested (refreshed price/date/status; mileage/vin/color/transmission kept where enrichment provided them): ${stats.alreadyIngested}`);
   const newCars = stats.inserted.filter((i) => i.created).length;
   const attached = stats.inserted.length - newCars;
   console.log(`Inserted: ${stats.inserted.length}  (${newCars} created a new car, ${attached} ATTACHED to a car already in the catalogue)`);

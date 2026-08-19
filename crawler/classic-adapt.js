@@ -71,7 +71,13 @@ function parseMileage(value) {
 
 function parseDate(value) {
   if (!value) return null;
-  const date = new Date(String(value).trim());
+  const text = String(value).trim();
+  // Auction cards publish a calendar date, not a timestamp. Construct it at UTC noon so the
+  // machine's local timezone cannot move a June 27 sale back to June 26 during serialization.
+  const dateOnly = text.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),\s+(\d{4})$/i);
+  const date = dateOnly
+    ? new Date(Date.UTC(Number(dateOnly[3]), ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"].indexOf(dateOnly[1].slice(0, 3).toLowerCase()), Number(dateOnly[2]), 12))
+    : new Date(text);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 

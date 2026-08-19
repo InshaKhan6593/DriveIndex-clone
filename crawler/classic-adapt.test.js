@@ -3,7 +3,7 @@
 "use strict";
 
 const assert = require("assert");
-const { adaptClassicLot, parseMileage, parseMoneyUsd } = require("./classic-adapt");
+const { adaptClassicLot, parseDate, parseMileage, parseMoneyUsd } = require("./classic-adapt");
 
 let pass = 0;
 let fail = 0;
@@ -67,6 +67,10 @@ test("mileage prefers an explicit miles value and handles k suffix", () => {
   assert.strictEqual(parseMileage("8k km (5k mi)"), 5000);
   assert.strictEqual(parseMileage("27k mi TMU"), 27000);
   assert.strictEqual(parseMileage("TMU"), null);
+});
+
+test("date-only auction cards do not shift across timezones", () => {
+  assert.strictEqual(parseDate("Jun 27, 2026"), "2026-06-27T12:00:00.000Z");
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

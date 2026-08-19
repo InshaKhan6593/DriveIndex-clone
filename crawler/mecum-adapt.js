@@ -41,6 +41,28 @@ function parsePrice(text) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// AUTOMOBILIA, measured on the 2026-08-18 sitemap-scale harvest: big car events (Kissimmee
+// et al) carry inline memorabilia lots — 3,273 of ~19k records had titles with no model year,
+// and sampling showed signs, tether cars, tool kits, badges, models and neon gas-station
+// memorabilia ("1950S Ford A 1 Used Cars Double Sided Dealership Sign" — a make word on a
+// SIGN, so make-detection cannot catch it). Left in, all 3,273 flood the review queue as
+// UNPARSEABLE, one porcelain sign at a time — the exact failure mode that drove BaT's
+// taxonomy-level category exclusion. The resolver's component head-noun rule (wheels/seats/
+// manifold/gauges) stays authoritative for anything that slips past; this is the cheap
+// bounded front gate, keyed on OBJECT phrases only.
+//
+// ⚠️ Every pattern here was checked against REAL CAR NAMES it would destroy:
+//   bare "neon"   -> Plymouth Neon          bare "model"  -> Ford Model T / Model A
+//   bare "manual" -> "5-Speed Manual"       sign (no \b)  -> AMG "Designo"
+//   "print\b"     -> "Sprint" trims         bare "kit"    -> kit-car replicas (review's job)
+// Hence "sign\b", "model\s+(kit|by)", "owner's manual", no bare neon/kit.
+const AUTOMOBILIA_RE =
+  /\b(?:signs?\b|billboard|poster|banner\b|pedestal|display\b|diorama|scale\s+(?:tether\s+)?car|tether\s+car|slot\s+car|pedal\s+car|ride-on|models?\s+(?:kit|by)\b|scale\s+model|toys?\b|badges?\b|pins?\b|buttons?\b|medal|trophy|helmet|jackets?\b|shirt|hats?\b|caps?\b|globe\b|gas\s+pump|lubester|oil\s+bottle|bottles?\b|crate\b|(?:owner'?s?|shop|service)\s+manual|brochure|booklet|literature|\bprint\b|lithograph|painting|artwork|photograph|toolbox|tool\s+kit|tools?\b|jacks?\b|vise\b|anvil|grease\s+gun|spark\s+plug|engine\s+stand|gas\s+can|oil\s+can|grenade|granade|whiskey|decanter|hydroplane\s+model|mailbox|phones?\b|radios?\b|clocks?\b|thermometer|syrup|soda\s+machine|cooler\b|cabinet|chests?\b|trunk\s+lid|keychain|license\s+plates?\b|assortment|collection\s+of|lot\s+of|autographed|signed\s+shadowbox|shadowbox|stadium\s+seats?|kiddie\s+ride|coin\s+operated|rocking\s+boat)\b/i;
+
+function isAutomobilia(title) {
+  return AUTOMOBILIA_RE.test(String(title || ""));
+}
+
 /**
  * @param {{href:string, cardText:string}} card  scraped card
  * @param {string|null} soldAt  ISO date resolved from the AUCTION EVENT
@@ -53,12 +75,25 @@ function adaptLot(card, soldAt, extra = {}) {
   const title = titleFromSlug(parsed.slug);
   if (!title) return { kind: "skip", reason: "no title derivable from slug" };
 
-  const price = parsePrice(card.cardText);
+  // Automobilia gate — BEFORE the price/date gates so the reason reported is the true one.
+  if (isAutomobilia(title)) return { kind: "skip", reason: "automobilia/memorabilia" };
+
   // A card with no price is an unsold lot or a listing not yet run. Mecum shows "Bid Goes On"
-  // for lots that did not meet reserve — a real outcome, but not a sale.
-  if (!price) {
-    return { kind: "skip", reason: /bid goes on/i.test(card.cardText || "") ? "reserve not met (Bid Goes On)" : "no price on card" };
+  // for lots that did not meet reserve — a real outcome, but not a sale. The outcome label is
+  // checked BEFORE the price: a "Bid Goes On" card that also displays a high-bid figure must
+  // never be ingested as a transaction (a high bid is not a hammer price).
+  if (/bid goes on/i.test(card.cardText || "")) {
+    return { kind: "skip", reason: "reserve not met (Bid Goes On)" };
   }
+  const price = parsePrice(card.cardText);
+  if (!price) {
+    return { kind: "skip", reason: "no price on card" };
+  }
+  // $1 is Mecum's undisclosed/charity sentinel, not a market price — measured: a 1931
+  // Cadillac V16 Coach at $1, a 1941 Harley at $1. Ingesting it would drag that car's
+  // entire price curve toward zero. Same call as Gooding's `salePrice: 1` private-sale
+  // sentinel. $59 hammers on cheap memorabilia are real and unaffected by this gate.
+  if (price <= 1) return { kind: "skip", reason: "sentinel price ($1 = undisclosed/charity)" };
 
   // GATE: no date, no sale. See the header — this is the defect that removed every Mecum sale
   // from trend maths last time.
@@ -101,4 +136,4 @@ function adaptLot(card, soldAt, extra = {}) {
   };
 }
 
-module.exports = { adaptLot, titleFromSlug, parseLotUrl, parsePrice };
+module.exports = { adaptLot, titleFromSlug, parseLotUrl, parsePrice, isAutomobilia };

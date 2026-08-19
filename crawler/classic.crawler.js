@@ -22,6 +22,10 @@ const AUCTIONS_OUT = path.join(__dirname, "..", "samples", "staging", "classic-a
 const STATE = path.join(__dirname, "..", "samples", "classic.state.json");
 const DELAY_MS = Number(process.env.DELAY_MS) || 1500;
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+// Classic's anti-bot page allows a real headed Chromium session but challenges headless detail
+// requests. Use `HEADLESS=true` only in an environment that has verified the challenge flow.
+const HEADLESS = process.env.HEADLESS === "true";
+const SCRAPER_VERSION = 2;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const BROWSER_ARGS = ["--disable-blink-features=AutomationControlled"];
@@ -39,7 +43,9 @@ function saveJson(file, value) {
 async function goto(page, url) {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 120000 });
   await page.waitForFunction(() => document.readyState === "complete", null, { timeout: 120000 }).catch(() => {});
-  await page.waitForTimeout(1200);
+  // Vehicle detail fields, including View Source and history, hydrate after the initial HTML.
+  // Reading at 1.2s produced false "missing upstream URL" skips on an otherwise valid page.
+  await page.waitForTimeout(5000);
 }
 
 async function discoverAuctionUrls(page, max = Infinity) {
@@ -132,12 +138,13 @@ async function collectAuction(page, auctionUrl, maxLots = Infinity) {
 }
 
 async function run(auctionUrl, maxLots) {
-  const browser = await chromium.launch({ headless: true, args: BROWSER_ARGS });
+  const browser = await chromium.launch({ headless: HEADLESS, args: BROWSER_ARGS });
   const context = await browser.newContext({ userAgent: UA });
   await hideAutomation(context);
   const listPage = await context.newPage();
   const detailPage = await context.newPage();
   const state = loadJson(STATE, { auctions: {} });
+  state.version = SCRAPER_VERSION;
   const leads = new Map(loadJson(OUT, []).map((lead) => [`${lead.source}|${lead.source_lot_id}`, lead]));
   const key = auctionKey(auctionUrl);
   if (!key) throw new Error(`not a Classic auction URL: ${auctionUrl}`);
@@ -148,7 +155,9 @@ async function run(auctionUrl, maxLots) {
     let skipped = 0;
     for (const card of cards) {
       const existingKey = `${key}|${card.url}`;
-      if (state.auctions[existingKey]) continue;
+      // A challenge or a temporary missing detail page is not a terminal result. Only a
+      // successfully stored lead is skipped on a later run; failed attempts must be retried.
+      if (state.auctions[existingKey]?.status === "lead" && state.auctions[existingKey]?.version === SCRAPER_VERSION) continue;
       await sleep(DELAY_MS);
       const detail = await extractDetail(detailPage, card);
       const out = adaptClassicLot({ ...card, ...detail, auction_url: auctionUrl });
@@ -156,7 +165,7 @@ async function run(auctionUrl, maxLots) {
         leads.set(`classic|${out.record.source_lot_id}`, out.record);
         added++;
       } else skipped++;
-      state.auctions[existingKey] = { status: out.kind, reason: out.reason || null, fetched_at: new Date().toISOString() };
+      state.auctions[existingKey] = { status: out.kind, reason: out.reason || null, version: SCRAPER_VERSION, fetched_at: new Date().toISOString() };
       saveJson(OUT, [...leads.values()]);
       saveJson(STATE, state);
     }
@@ -172,7 +181,7 @@ async function run(auctionUrl, maxLots) {
 async function main() {
   const [mode = "run", target = "auto", maxRaw] = process.argv.slice(2);
   const max = Number(maxRaw) || Infinity;
-  const browser = await chromium.launch({ headless: true, args: BROWSER_ARGS });
+  const browser = await chromium.launch({ headless: HEADLESS, args: BROWSER_ARGS });
   const page = await browser.newPage({ userAgent: UA });
   await page.addInitScript(() => Object.defineProperty(navigator, "webdriver", { get: () => undefined }));
   try {

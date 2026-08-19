@@ -833,6 +833,28 @@ function resolveCarV2(db, saleRecord) {
   const yearConflict = slug?.year && parsed.year && slug.year !== parsed.year
     ? { titleYear: parsed.year, urlYear: slug.year }
     : null;
+
+  // CANONICAL CASING FOR INFERRED MAKES. Positional inference title-cases its candidate
+  // ("1959 MGA Twin Cam" -> make "Mga"), while alias-resolved records carry the alias table's
+  // casing ("MGA"). findOrCreateCar matches make EXACTLY, so the two casings never meet and
+  // one real car splits into parallel catalogue rows — the same silent-split class as the
+  // REO/Reo bug, approaching from the other side (measured after the Bonhams scale-up: 25
+  // Mga/Mgb rows beside canonical MGA/MGB ones, split-audit FAIL with 8 true splits).
+  //
+  // The catalogue's own accepted makes are the corpus's source of truth for casing, so an
+  // inferred make adopts the casing the DB already uses — sales-weighted, so the dominant
+  // spelling wins rather than an arbitrary LIMIT 1. Alias-resolved makes are canonical by
+  // construction and skip this entirely.
+  if (parsed.makeInferred) {
+    const canon = db.prepare(
+      `SELECT make FROM car
+       WHERE lower(make) = lower(?) AND make <> ?
+       ORDER BY (SELECT COUNT(*) FROM sale s WHERE s.car_id = car.id) DESC
+       LIMIT 1`
+    ).get(parsed.make, parsed.make);
+    if (canon) parsed.make = canon.make;
+  }
+
   const outcome = findOrCreateCar(db, parsed);
   if (outcome.decision === "ambiguous") {
     return {
