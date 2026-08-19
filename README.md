@@ -20,36 +20,52 @@ responses and rendered pages, where every claim carries an evidence class (`[V]`
 
 | | ours | DriveIndex |
 |---|---|---|
-| sales | **219,512** | 110,043 |
+| sales | **262,501** | 110,043 |
 | **listings (for-sale now)** | **5,043** (5,026 active) | ~35,309 |
-| cars | 61,773 | 7,148 (model+generation ranges) |
-| **sales per car** | **3.55** | — |
-| cars with repeat sales | 23,603 | — |
-| distinct makes | 376 | 84 |
-| date range | 2014-07-30 → 2026-08-16 | — |
-| review queue | 28,764 (10.5%) | none — they ingest everything |
+| cars | 71,482 | 7,148 (model+generation ranges) |
+| **sales per car** | **3.67** | — |
+| cars with repeat sales | 27,664 | — |
+| distinct makes | 394 | 84 |
+| date range | 2012-08-18 → 2026-08-16 | — |
+| review queue | 36,027 (12.1%) | none — they ingest everything |
 
-Sources with **sales** — **8 of 13**, and the top 4 are DriveIndex's #1–#4, carrying **~90% of
-their measured source mix**:
+Sources with **sales** — **8 of 13**, and the top 4 are DriveIndex's #1–#4. Weighted by their
+own measured source mix, what we hold represents **96.2%** of it
+(`node validation/source-coverage.js`):
 
 | source | sales | their mix |
 |---|---|---|
-| Bring a Trailer | 162,313 | 72.2% |
-| Cars & Bids | 35,766 | 5.5% |
-| **Bonhams** | **8,956** | 3.4% |
-| Mecum | 7,309 | 6.4% |
-| RM Sotheby's | 2,749 | 6.2% |
-| Gooding & Company | 2,043 | not in their mix (they don't carry it) |
-| Broad Arrow | 351 | not in their mix |
+| Bring a Trailer | 162,582 | 72.2% |
+| **Mecum** | **49,038** | 6.4% |
+| Cars & Bids | 35,788 | 5.5% |
+| Bonhams | 9,864 | 3.4% |
+| RM Sotheby's | 2,753 | 6.2% |
+| Gooding & Company | 2,046 | not in their mix (they don't carry it) |
+| Broad Arrow | 405 | not in their mix |
 | Sotheby's Motorsport | 25 (partial — see below) | not in their mix |
 
-> Bonhams went 496 → 8,956 on 2026-08-18 after three bugs were fixed in its harvester: auction
-> pages server-render only the first 48 lots (67 of 113 car auctions had yielded *nothing*),
-> 72 sitemap ids were retried forever because they 308 to Bonhams' partner houses, and 92.9% of
-> its titles append `Chassis no. …`, which was going into `model_key` and making every lot its
-> own model. See `notes/source-registry.md`. **60.8% of its sold lots are GBP/EUR/CHF.** Those
-> now carry a correct `price_usd` (ECB rate for the day they sold, `fx/`), but they are still
-> excluded from the maths — deliberately, because they sold outside the US. See below.
+> **Mecum went 7,309 → 49,038 on 2026-08-19, and it is what pushed the corpus back to 2012.**
+> Three things did it, in order of size: event discovery moved from slug-guessing to their own
+> `auction-sitemap{1..3}.xml` (257 slugs back to 2012, where guessing failed on 5 of 14 because
+> Indianapolis is `indianapolis-YYYY` in some years and `indy-YYYY` in others); a pagination
+> truncation was fixed and every affected event requeued; and two front gates were added to the
+> adapter — an automobilia matcher (big Kissimmee-scale events carry porcelain signs, pedal cars
+> and tool kits inline, 3,273 of ~19k records had no model year at all) and a `$1` sentinel gate
+> (Mecum publishes undisclosed/charity results as $1 — a 1931 Cadillac V16 at $1 would have
+> dragged that car's whole curve to the floor). Both gates were written against real car names
+> they must not destroy: bare `neon` is a Plymouth, bare `model` is a Ford Model T, `print` is
+> inside "Sprint". **55 of 186 discovered events are fully harvested** — the rest is coverage
+> work, not access work.
+>
+> Bonhams went 496 → 9,864 after three bugs were fixed in its harvester: auction pages
+> server-render only the first 48 lots (67 of 113 car auctions had yielded *nothing*), 72
+> sitemap ids were retried forever because they 308 to Bonhams' partner houses, and 92.9% of its
+> titles append `Chassis no. …`, which was going into `model_key` and making every lot its own
+> model. See `notes/source-registry.md`. **Its non-USD share is the corpus's whole FX exposure**
+> (GBP 4,329 · EUR 2,801 · CHF 384 sales). Those carry a correct `price_usd` (ECB rate for the
+> day they sold, `fx/`), but they are still excluded from the maths — deliberately, because they
+> sold outside the US. See below. The 1,838 rows that still have no `price_usd` are all
+> `price = 0` bought-in Bonhams lots: no published bid, so there is nothing to convert.
 
 ### This is a US-market index, and that is a choice
 
@@ -65,13 +81,13 @@ one rather than an accident:
 
 | | |
 |---|---|
-| priced, comparable sales excluded | **8,193** (bon 3,888 · bat 3,158 · rms 900 · good 145 · broadarrow 102) |
-| cars that would newly reach 3+ clean sales | 433 |
-| cars reporting "insufficient" that do have priced overseas sales | 4,237 |
+| priced, comparable sales excluded | **8,954** (bon 4,640 · bat 3,166 · rms 901 · good 145 · broadarrow 102) |
+| cars that would newly reach 3+ clean sales | 436 |
+| cars reporting "insufficient" that do have priced overseas sales | 5,578 |
 
-The flag is **not** a currency proxy — 5,606 USD-denominated sales are flagged non-US from real
-country data, and Bonhams alone sold 33 lots in the UAE in dollars. Adapters that still derive
-it from currency alone are wrong in both directions; `bat` and `bon` read a real country field.
+The flag is **not** a currency proxy — 5,651 USD-denominated sales are flagged non-US from real
+country data (bat 5,619, bon 32). Adapters that still derive it from currency alone are wrong in
+both directions; `bat` and `bon` read a real country field.
 
 Sources with **listings** — asking-price inventory, a separate table from `sale` and never
 mixed into it:
@@ -82,10 +98,17 @@ mixed into it:
 | Broad Arrow | 174 | upcoming-auction consignments, price = estimate midpoint |
 | RM Sotheby's | 17 | upcoming consignments |
 
-**Verified at this scale:** 0 hard splits · 0 duplicate lot keys · 0 same-physical-car
-cross-source duplicates · 0 duplicate car identities · 0 NULL-attribute splits ·
-`validation/cron-safety.test.js` converges to **exact +0** across 3 consecutive re-ingest
-passes · **236+ tests passing**.
+**Re-verified at 262,501 sales (2026-08-19):** 0 hard splits · 0 duplicate lot keys · 0
+same-physical-car cross-source duplicates · 0 duplicate car identities · 0 NULL-attribute splits
+on any intrinsic column · 0 sales unattached to a car · **236+ tests passing**.
+
+Two honest footnotes on that line. `validation/duplication-audit.js` now flags **6** rows at its
+level-4 check (identical car + date + price + source); all six were inspected and every one has a
+distinct source lot id — they are single-marque Bonhams sales hammering several examples of one
+model on one day, plus one RM pair worth a second look, not re-ingested rows. And
+`validation/cron-safety.test.js` has **not** been re-run since Mecum quadrupled: a 3-pass
+re-ingest against a 198 MB BaT harvest is hours, so its "exact +0" result stands from the
+219k-sale corpus, not this one.
 
 **A note on that convergence number, for anyone re-running this:** it briefly looked broken at
 this scale — a 3-pass re-ingest test was still adding thousands of sales on every pass instead
@@ -223,20 +246,21 @@ bids, the "Sold (N)" count excludes them, and the chart plots transactions only.
 **all 54,818 valuation rows** and `computeLiquidity()` had never once seen real supply —
 months-of-supply and every liquidity verdict were derived from an assumed-empty market. It also
 inner-joined `sale`, so **1,008 cars with live listings but no sales got no valuation row at
-all** (their pages rendered blank). Both fixed: `listings_count` now sums to 4,958, exactly
+all** (their pages rendered blank). Both fixed: `listings_count` now sums to **5,026**, exactly
 matching active listings with a resolved car, and 0 cars are missing a row.
 
-### The single biggest quality constraint: BaT publishes no mileage
+### The single biggest quality constraint: mileage, and it got worse before it got better
 
 Worth separating from the list below, because it is not a bug in the engine — it is a hole in
 the input that the engine cannot compensate for.
 
 | source | share of corpus | sales with mileage |
 |---|---|---|
-| **Bring a Trailer** | **74%** | **0%** |
-| Cars & Bids | 16% | **100%** |
-| everything else | 10% | ~0% |
-| **corpus overall** | | **16.3%** |
+| **Bring a Trailer** | **62%** | **2.4%** — was 0.04%; `crawler/bat-detail.crawler.js` is filling it |
+| **Mecum** | **19%** | **0.03%** |
+| Cars & Bids | 14% | **99.5%** |
+| everything else | 5% | ~0% |
+| **corpus overall** | | **15.0%** — down from 16.3%, because Mecum added 49k odometer-less sales |
 
 `engine/signal.js` mileage-adjusts every price before fitting a trend, and a sale with no
 odometer falls back to `ctx.avgMiles` — it is treated as **average for its car**. That is the
@@ -245,9 +269,21 @@ corpus a 5,000-mile car and a 150,000-mile car of the same model are compared li
 For scale, the adjustment moves a delivery-mile example **+30%** against a 60k-mile one.
 
 The number exists — it is on BaT's **lot page**, not the list API that
-`crawler/bat-partitioned.crawler.js` reads. Closing it costs one extra request per lot against
-162k lots, so it wants to run newest-first and incrementally, the same shape as the Bonhams
-repair queue. See `notes/source-registry.md` → "What is left to build".
+`crawler/bat-partitioned.crawler.js` reads. **That is now built.**
+`crawler/bat-detail.crawler.js` fetches one lot page at a time, validates it against the stored
+record before writing anything (og:title must match after normalising BaT's `No Reserve: ` prefix
+and entity-encoded titles, the page's hammer price must agree, a VIN must pass `isValidVin`, and
+TMU / kilometre / ambiguous-transmission rules apply), and runs as the `scrape:bat-detail` cron
+stage at 150 lots per run so the backlog drains without hammering the host. Ingest keeps the
+enrichment with a `COALESCE` upsert, so a later re-scrape of the list API — which carries none of
+these fields — can never wipe it back off the row.
+
+**Measured after 10,263 lot pages:** 8,912 clean, 809 with no details block, 518 rejected on a
+price mismatch, 24 on a title mismatch. 3,844 BaT sales now carry an odometer, median **42,000
+miles**, mean 53,700 — i.e. no low-mileage bias, which is exactly the trap a title regex would
+have walked into. At 150 lots a night the remaining ~152k lots are a long grind, so this closes
+gradually rather than in one pass. Bonhams and Mecum have the same hole and no equivalent
+harvester yet.
 
 ### Known-wrong, not yet fixed
 
@@ -323,7 +359,7 @@ nothing similar                 -> CREATE
 ```
 
 The catalogue is **fully derived** — no seed data, no `INSERT INTO car` in the schema, no
-model list to maintain. All 47,426 cars were created from titles.
+model list to maintain. All **71,482** cars were created from titles.
 
 ---
 
@@ -381,13 +417,21 @@ regex over its prose (the first version mis-sorted 11,837 items that way):
 
 | class | count | what it is |
 |---|---|---|
-| `UNPROVEN_MODEL` | 12,154 | known make, unproven tokens — usually self-resolves on volume |
-| `UNKNOWN_MAKE` | 1,990 | **lookup**: is this token a car marque? One answer covers every listing |
-| `UNPARSEABLE` | 1,046 | doesn't fit `{year} {make} {model}` |
+| `UNPROVEN_MODEL` | 30,729 | known make, unproven tokens — usually self-resolves on volume |
+| `UNKNOWN_MAKE` | 3,022 | **lookup**: is this token a car marque? One answer covers every listing |
+| `UNPARSEABLE` | 2,276 | doesn't fit `{year} {make} {model}` |
 | `SAME_CAR?` | 0 | genuine merge/split judgement |
 
-Rejections are **recorded, not discarded** — 15,086 structural, 3,584 out-of-scope, 2,432
+Rejections are **recorded, not discarded** — 15,972 structural, 4,599 out-of-scope, 3,688
 standing decisions, each with a reason and the full record retained so any can be overturned.
+The largest single rejection reason is still "no model year in title or URL" (8,149): a
+model-year price index has nothing to attach such a record to.
+
+The queue grew 28,764 → 36,027 with the Mecum harvest, and **that is the system working as
+designed, not degrading.** Mecum titles are rebuilt from URL slugs and are terse, so a much
+larger share of them land as `UNPROVEN_MODEL` — the bucket that self-resolves as volume arrives
+rather than the one that needs a human. As a share of everything seen the queue moved 10.5% →
+12.1%; the genuine-judgement bucket is still 0.
 
 **Standing rule: bad data is worse than less data.** When in doubt, queue it.
 
@@ -425,13 +469,25 @@ Without Reserve 17, **Asking 7**. Asks route to `listing`, never `sale`.
 
 ⚠️ **No date field** — resolved once per auction from schema.org `Event`.
 
-### Mecum — partition by event
-Search route is a dead end. Real archive is `/auctions/{event}/lots/?page=N`, ~1,300 sales per
-event. Selectors are **structural**, never their hashed CSS-module class names
-(`CardLot-module__NbNTua__card` — that hash changes every deploy).
+### Mecum — partition by event, with events found in their sitemap
+Search route is a dead end (no prices, no pager, links point at auctions rather than lots). Real
+archive is `/auctions/{event}/lots/?page=N`, up to ~4,400 lots per event. Selectors are
+**structural**, never their hashed CSS-module class names (`CardLot-module__NbNTua__card` — that
+hash changes every deploy).
 
-⚠️ **Lot cards carry no date** — resolved per event. Mecum previously ran at 0% `sold_at`,
+Event discovery is their own `auction-sitemap{1..3}.xml`, **257 slugs back to 2012**. This
+replaced slug-guessing, which failed on 5 of 14 attempts because the pattern is not
+`{city}-{year}`: 2017–2023 Indianapolis sales are `indianapolis-YYYY`, 2020/2024/2025 are
+`indy-YYYY`.
+
+⚠️ **Lot cards carry no date** — resolved per event, from the event page's own og:description
+("…in Dallas, TX on September 4-7, 2024", last day wins). Mecum previously ran at 0% `sold_at`,
 which silently removed every Mecum sale from trend maths.
+
+⚠️ **Car events carry memorabilia inline** and **$1 is a sentinel, not a price.** Both are
+gated in `crawler/mecum-adapt.js` before the price and date gates, so the skip reason reported is
+the true one. See the Mecum note under "Where it stands" for what each pattern was checked
+against.
 
 ### Gooding & Company — read the Gatsby build's own JSON, no scraping
 Every `/auction/realized/{slug}` page ships its full lot list at
@@ -511,9 +567,12 @@ may do, so it is not collapsed into one bucket:
 
 - **Permission-gated, and the permission was obtained.** **Mecum** — robots.txt prose bars
   automated collection *"without prior written permission from Mecum Auctions"*. The operator
-  holds that written permission as of **2026-08-18**, which is why the crawler is built and
-  scheduled. A grant to a NAMED PARTY, not a general finding: if it lapses, drop `scrape:mecum`
-  from `jobs/stages.js` — the standing data stays, collection stops.
+  holds that written permission as of **2026-08-18**, which is why the crawler exists at all. A
+  grant to a NAMED PARTY, not a general finding: if it lapses, stop running it — the standing
+  data stays, collection stops.
+  ⚠️ **It is run by hand, not by cron.** There is no `scrape:mecum` stage in `jobs/stages.js`,
+  though the crawler's own header says there is. Deliberate or not, that is the current state:
+  `node crawler/mecum.event.crawler.js run` is the only thing that advances it.
 - **Named AI-crawler blocks.** **Collecting Cars**, **PCAR Market** — `User-agent: *` is
   `Allow: /`, then `ClaudeBot` / `anthropic-ai` / `GPTBot` / `CCBot` are each `Disallow: /`.
   Nothing here crawls them. Whether that binds a scraper a human writes and runs themselves is a
@@ -521,10 +580,13 @@ may do, so it is not collapsed into one bucket:
 - **Unreadable terms.** **Barrett-Jackson**, **Hagerty**, **Cars.com** — `robots.txt` itself
   returns 403, so permission cannot be established. Treated as closed.
 
-**Open but unbuilt:** **Bonhams** is the largest opportunity — robots.txt permits it, and the 24
-sales on file come from a proof-of-concept pinned to one auction with `maxLots` defaulting to 5.
-One request per auction returns every lot via `__NEXT_DATA__`. **Classic.com** is fully
-permissive but an aggregator (`SOURCE_TRUST` 9, staging only, never authoritative).
+**Open and now built:** **Bonhams** was the largest opportunity and is no longer unbuilt — the
+proof-of-concept pinned to one auction with `maxLots: 5` became a sitemap-enumerated harvester
+(`crawler/bonhams.crawler.js`, cron stage `scrape:bonhams`) carrying 9,864 sales. 4,359 of its
+11,353 sitemap auction ids have been visited so far; 230 of those were car sales and 4,054 were
+another Bonhams department. **Classic.com** is fully permissive but an aggregator
+(`SOURCE_TRUST` 9, staging only, never authoritative) — `crawler/classic.crawler.js` writes
+leads to `samples/staging/`, never to `samples/scraped/`.
 
 See `notes/WRITING-A-SCRAPER.md` for the record contract and the Bonhams probe findings.
 
@@ -562,8 +624,8 @@ stable         484 cars   median 0.993
 
 | # | theirs | ours | why |
 |---|---|---|---|
-| 1 | 10 currencies ingested, computed on 1 | `price_usd` only when currency IS USD | their defect #1 — non-USD silently dropped from maths while displayed |
-| 7 | `reserveNotMet` boolean | `status` enum: `sold` / `sold_after` / `reserve_not_met` | a boolean cannot hold *sold after auction*; we have **2,404** such real transactions |
+| 1 | 10 currencies ingested, computed on 1 | `price_usd` stamped at ingest from the ECB rate **on `sold_at`** | their defect #1 — non-USD silently dropped from maths while displayed. Ours are converted correctly, then held out of the maths by `non_us_sale` for a stated reason |
+| 7 | `reserveNotMet` boolean | `status` enum: `sold` / `sold_after` / `reserve_not_met` | a boolean cannot hold *sold after auction*; we have **2,408** such real transactions (all Cars & Bids — the only source that publishes the third state) |
 | — | ~30 valuation fields flattened onto `car` | separate `car_valuation` | recompute without touching editorial data |
 | — | body style inside model name (29%) | own column | root cause of their 163 duplicate pairs |
 | — | ingest everything | review queue | fragmentation is not accepted as a cost |
@@ -582,9 +644,10 @@ Individual stages:
 
 ```bash
 node crawler/bat-partitioned.crawler.js run    # resumes by partition
+node crawler/bat-detail.crawler.js [nLots]     # lot-page enrichment: mileage/VIN/transmission/color
+node crawler/mecum.event.crawler.js run [n]    # resumes by event; permission-gated, see below
 node crawler/cab.crawler.js                    # incremental; --full re-walks
 node crawler/rms.crawler.js run                # resumes by auction, 45-day recheck
-node crawler/mecum.event.crawler.js run [n]    # resumes by event
 node crawler/gooding.crawler.js run            # resumes by auction, 45-day recheck; --full re-walks
 node crawler/sms.crawler.js                    # two fixed fetches every run — see source writeup for why
 node crawler/broadarrow.crawler.js [eventCode] # one closed event at a time, 10s crawl-delay honored
@@ -639,6 +702,9 @@ price curves. Verified against the data: Mercedes is the only such family in the
 | stage | marker | unit |
 |---|---|---|
 | BaT | `bat-partitioned.state.json` | partition — unmarked on failure, so it retries |
+| BaT detail | `bat-detail.state.json` | lot id, with its outcome (`ok` / `no-details` / `price-mismatch` / `title-mismatch`) |
+| Mecum | `mecum.state.json` | auction event, with its resolved date and lot count |
+| Bonhams | `bonhams.state.json` | auction id — records `other` (wrong department) and `offsite` so neither is refetched |
 | RM | `rms.state.json` | auction event, immutable once settled + 45-day recheck |
 | Gooding | `gooding.state.json` | auction — same immutable + recheck-window shape as RM |
 | C&B | the harvest file | auction id — stops after 8 batches with nothing new |
@@ -670,24 +736,28 @@ node jobs/engine-health.js                # is the engine producing usable outpu
 
 ## Known gaps
 
-**Listings: 4,975 vs DriveIndex's ~35,309.** Up from 137 on 2026-08-17. DuPont Registry
-sitemaps 1–6 harvested (~6,000 URLs of ~15,000 listed); sitemaps 7–15 untouched. Broad Arrow
-contributes 172 upcoming-consignment estimates across 8 events; ~2,200 lots across 25 more
-events remain unharvested at their mandated 10s crawl-delay.
+**Listings: 5,043 vs DriveIndex's ~35,309.** Up from 137 on 2026-08-17, and the one number that
+did *not* move with this data drop — every new record was a completed sale. DuPont Registry has
+5,969 of 13,814 sitemap URLs visited (4,852 became listings); Broad Arrow contributes 174
+upcoming-consignment estimates from 975 of ~2,730 lots, at their mandated 10s crawl-delay. Both
+now advance on their own as cron stages, so this closes without anyone driving it.
 
 ### Field coverage — measured, not estimated
 
 The blocker for most unbuilt features is a specific empty column, and they fall into three very
 different categories:
 
+Re-counted from the database 2026-08-19, not sampled:
+
 | field | coverage | why it's empty |
 |---|---|---|
-| `sale.mileage` | **16.9%** | BaT is **0.04%** (71 / 162,012) vs Cars & Bids **99.5%** — and BaT is 77% of the corpus |
-| `sale.vin` | 0.1% | not in BaT's list API (but `listing.vin` is **98.7%**, from DuPont) |
-| `sale.transmission` | 6.6% | detail-page only |
-| `sale.color` / `sale.options` | ~0.04% | detail-page only — blocks Spec Premiums entirely |
-| `car.generation` | **0.9%** | not scrapable; a per-marque curation project |
-| `car.body_type` | 37.7% | partially title-inferable, rest needs per-model rules |
+| `sale.mileage` | **15.0%** | BaT **2.4%** and climbing via `bat-detail`; Mecum **0.03%** across 49k rows; Cars & Bids **99.5%** |
+| `sale.vin` | 2.9% | BaT **4.0%** (bat-detail), Broad Arrow 78%, Bonhams 7% — and `listing.vin` is **98.7%**, from DuPont |
+| `sale.transmission` | 7.2% | Cars & Bids 38%, BaT 3.1% (bat-detail); detail-page only elsewhere |
+| `sale.color` | 2.4% | BaT 3.8% (bat-detail); detail-page only elsewhere — still blocks Spec Premiums |
+| `sale.options` | ~0% | detail-page only, not parsed by any adapter |
+| `car.generation` | **1.3%** | not scrapable; a per-marque curation project |
+| `car.body_type` | 42.0% | partially title-inferable, rest needs per-model rules |
 | `car.msrp` / `hp` / `zero_sixty` / `production` | **0%** | **no auction house publishes these** — needs a spec database |
 | `car_valuation.peak_price` / `from_peak` / `market_repricing` / `class_rank` | **0%** | **not a data gap — nothing computes them yet** |
 | `listing.image_url` | 0% | not captured by the DuPont/Broad Arrow adapters |
@@ -697,8 +767,10 @@ Three categories, in order of what they cost to close:
 1. **Engine code only, no scraping** — `peak_price`, `from_peak`, momentum, `class_rank`.
    Estimated-bottom is already computed and simply never displayed.
 2. **Data is on pages we already crawl, we just don't parse it** — BaT mileage/VIN/transmission
-   (detail pages), listing images, and FX rates for the **1,114 EUR/GBP/CHF sales** currently
-   dropped from all maths because `price_usd` is null.
+   (detail pages: **built**, draining at 150 lots/night), the same fields for Mecum and Bonhams
+   (**not built**), and listing images. FX is no longer on this list: every priced sale converts,
+   and the 1,838 rows without a `price_usd` are `price = 0` bought-in Bonhams lots with no
+   published bid.
 3. **Needs a source we don't have** — MSRP, hp, 0-60, production. Only two of DriveIndex's
    advertised features are genuinely blocked here: MSRP-based stats and spec-level option
    premiums.
@@ -708,15 +780,37 @@ it is *notably low* ("7k-Mile 2005 Evo VIII"). Parsing titles alone harvests a l
 subsample, drags `avgMileage` down and makes every mileage adjustment systematically wrong —
 worse than the current honest gap. The correct fix is detail-page scraping, not a regex.
 
-**20% of cars get a signal** vs their 45.4%. Grain, not quality: our rows are exact model-years,
-theirs are generation ranges. Real fix is generation extraction (**0.9% populated**), not
-grouping — tested, and grouping alone made the ratio *worse*.
+**37.8% of cars get a signal** vs their 45.4% — up from 20%, and the gap is now mostly closed.
+The cause was grain, not quality: our rows are exact model-years, theirs are generation ranges,
+and 91.1% of `insufficient` cars have one or two sales *in existence* — no amount of harvesting
+reaches transactions that never happened.
 
-**Mecum discovery** finds events via `/results/` (21 years deep), but past-event slugs are not
-uniform (`kissimmee-2022` works, `indy-2022` does not exist).
+What closed it is the **model-window fallback** in `jobs/nightly-compute.js`, and it supersedes
+the earlier finding here that grouping made the ratio worse. A fixed 5-year band did; a window
+**centred on the car** (`±2` model years, same make + `model_key` + `body_type`) does not,
+because a band splits generations at arbitrary boundaries — 1964 and 1965 Mustangs land in
+different buckets — while a centred window cannot. Three rules keep a borrowed history from
+passing as an owned one:
 
-**BaT harvest incomplete** — 4 large partitions unstarted (German/sold 69,806, American/sold
-66,380, Truck & 4x4, Convertibles).
+- it runs **only** when the car has no signal of its own, never overwriting an `own` verdict;
+- confidence is discounted, so a pooled car can never outrank a car with real history (the
+  pooled median sits a median 16.5% from the car's own sales, p90 62% — the cost is real);
+- it **borrows only what is missing.** A car can have enough sales to know its price but too
+  short a span to show direction (measured: a 2023 Subaru BRZ, 4 sales inside 84 days), so where
+  the car priced itself its own price survives and only the trend is taken from the neighbours.
+
+Every row records which happened, and the API exposes it: `own` 58,347 · `own-price/window-trend`
+11,743 · `model-window` 1,381. Generation extraction (**1.3% populated**) is still the better
+long-term fix; this is the honest interim one.
+
+**BaT harvest — partitions are done, the cap is not.** All 224 partition×sort units
+(56 partitions × 4 sorts) are complete. What remains is BaT's own 10,000-result-per-query
+ceiling: 11 partitions exceed it, so 4 sorts reach at most ~40k of each (German/sold ~69.9k,
+American/sold ~66.5k). Going further needs partitions narrower than 10k — by year or price band
+inside a category — not more sorts.
+
+**Mecum coverage** — 55 of 186 discovered events fully harvested. Two `indy-20NN` slugs are
+marked dead (they genuinely do not exist; those years are `indianapolis-YYYY`).
 
 ---
 

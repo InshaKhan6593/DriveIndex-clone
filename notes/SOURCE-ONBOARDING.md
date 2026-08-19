@@ -29,16 +29,25 @@ code for it (`node validation/review-taxonomy.js`).
 
 ## 1. Measured state of the review queue
 
-12,843 pending items at the time of writing. The taxonomy tool buckets them by SHAPE, not brand:
+**36,027 pending items (re-measured 2026-08-19, `node validation/review-taxonomy.js`).** The
+taxonomy tool buckets them by SHAPE, not brand:
 
 | Bucket | Count | Share | Verdict |
 |---|---|---|---|
-| **No year anywhere** | 5,057 | 39.4% | **Structural reject.** A model-year price curve cannot index a car with no model year. |
-| **`{year} {unknown word} {model}`** | 4,366 | 34.0% | **Automatable** — position implies the make. See §3. |
-| **Known make, unproven model** | 3,420 | 26.6% | **Self-resolving** — corpus/batch evidence accepts these as volume arrives. |
+| **Known make, unproven model** | 33,591 | 93.2% | **Self-resolving** — corpus/batch evidence accepts these as volume arrives. |
+| **`{year} {unknown word} {model}`** | 1,231 | 3.4% | **Automatable** — position implies the make. See §3. |
+| **No year anywhere** | 1,205 | 3.3% | **Structural reject.** A model-year price curve cannot index a car with no model year. |
 
-So roughly **60% of the queue is code work, not human work** — but only if the automation is
-gated properly, because the "unknown word after the year" bucket is NOT all cars (§3).
+**The shape of this queue has inverted since it was first measured, and that is the important
+part.** It used to be 39% no-year / 34% positional / 27% unproven-model on 12,843 items. It is
+now 93% unproven-model on 36,027. Two things did it: the no-year bucket is now caught up front
+(BaT's category exclusions, Mecum's automobilia gate) instead of being queued one porcelain sign
+at a time, and every large harvest since — Bonhams, then 49k Mecum sales — arrives as terse
+titles under makes we already know.
+
+So **almost the whole queue is now the bucket that resolves itself on volume**, and human work is
+a rounding error on it. Do not read a growing queue as a degrading pipeline without checking
+which bucket grew: `UNPROVEN_MODEL` growing is the system working; `UNPARSEABLE` growing is not.
 
 ---
 
@@ -65,7 +74,9 @@ Each is a *shape*, brand-independent, and holds for every source added later.
 ## 3. The `{year} {unknown word}` bucket — automatable, but ONLY with a gate
 
 Auction titles are overwhelmingly `{year} {make} {model} …`, so the word after the year is
-usually the marque. But the measured head of that bucket is **not all cars**:
+usually the marque. But the measured head of that bucket is **not all cars**.
+
+Head as first measured (12,843-item queue):
 
 ```
 211 Moto (Guzzi)      174 Michael (Andretti/Schumacher)   150 AM       139 MV (Agusta)
@@ -74,13 +85,31 @@ usually the marque. But the measured head of that bucket is **not all cars**:
 44 LaSalle             35 Formula  33 Goodyear     27 Bertone      24 Autozam
 ```
 
-920 distinct first-words. They fall into six kinds, and **only the first is a car**:
+Head re-measured 2026-08-19 (36,027-item queue), 238 distinct first-words, top 30 covering
+60.9%:
+
+```
+80 SRT      62 Lamborghini  50 Michael   34 Formula   32 Ford      30 Porsche
+25 Porsche-Diesel  21 Lola  19 Lotus     16 Scuderia  15 Custom    14 Canon
+13 Ducati    9 Ayrton        9 Newman     8 John       7 McLaren    7 Giancarlo
+ 6 Autocar   6 Stanguellini  6 March      6 Kurtis     6 Jordan     5 IndyCar
+```
+
+**The bulk marque-recovery work is done** — MGB, MGA, Morris, LaSalle and Steyr-Puch are gone
+from the head, and the whole bucket shrank from 4,366 items to 1,231. What replaced them is a
+different problem: entries like SRT, Lamborghini, Ford, Porsche and McLaren are makes the system
+already knows, so their presence here means the title's FIRST word after the year is a sub-brand,
+a driver's name, or a team (Scuderia, Rothmans, Newman, Andretti — racing memorabilia and
+liveried cars), not that the marque is missing. Treat a known make appearing in this list as a
+signal about the *title shape*, not as a marque to add.
+
+The six kinds below still hold, and **only the first is a car**:
 
 1. **Real marques missing from the alias list** — MGB, MGA, Morris, LaSalle, Steyr-Puch, Autozam
-2. **Motorcycles / scooters** — Moto Guzzi, MV Agusta, Vespa, Bultaco, Laverda, Puch
+2. **Motorcycles / scooters** — Moto Guzzi, MV Agusta, Vespa, Bultaco, Laverda, Puch, Ducati
 3. **RVs, trailers, trucks** — Airstream, Winnebago, Thor, Freightliner
-4. **Race constructors** — Lola, Ralt, Formula (open-wheel, no consumer model)
-5. **Non-vehicles** — Goodyear (tyres), signed shirts, memorabilia
+4. **Race constructors** — Lola, Ralt, Kurtis, Stanguellini, Formula (open-wheel, no consumer model)
+5. **Non-vehicles** — Goodyear (tyres), Canon, signed shirts, driver-name memorabilia
 6. **Coachbuilders** — Bertone, Brewster, Chapron, Saliot (a *modifier*, not the make)
 
 **Therefore positional inference must never accept on position alone.** The required chain:
@@ -172,6 +201,15 @@ rule 3 — never an autonomous decider.
 4. **Confirm a real sale DATE exists.** RM's list endpoint has none; Mecum's had none and every
    Mecum sale was silently absent from trend maths until caught. Resolve per-auction if needed,
    and **refuse the record if you cannot** — never emit a hollow date.
+4b. **Ask what the source publishes INSTEAD of a price.** Every house has a sentinel and it is
+   never documented: Gooding writes `salePrice: 1` for an undisclosed private sale, Mecum writes
+   `$1` for undisclosed and charity lots, Bonhams writes `0` for a bought-in lot, Broad Arrow
+   shows a ranged estimate that is not a hammer price at all. Each one ingested as a dollar
+   figure corrupts a car's whole curve. Find the sentinel before harvesting at volume, not after.
+4c. **Ask whether car events carry non-car lots inline.** Mecum's do — 3,273 signs, pedal cars
+   and tool kits in one harvest — and so do Bonhams' and Gooding's. A bounded front gate in the
+   adapter is far cheaper than letting the review queue triage them one at a time; excluding at
+   the taxonomy level (as BaT allows) is cheaper still where the source exposes categories.
 5. **Confirm the lot id is stable and source-native.** A reverse-engineered id (BaT slugs) defeats
    idempotent ingest and duplicates every sale on the next run.
 6. **Write adapter gate tests before harvesting at volume** (`crawler/rms-adapt.test.js`).

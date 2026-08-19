@@ -7,14 +7,14 @@ Probed live 2026-08-15 with `node crawler/probe-all-sources.js`. Machine-readabl
 
 | Source | Code | Reachable | Listings on index | Prices unauth. | Adapter | Crawler |
 |---|---|---|---|---|---|---|
-| Bring a Trailer | `bat` | yes | **347** | yes | built | **built — 162,012 sales; 4 large partitions still unstarted (~130k more)** |
-| Cars & Bids | `cab` | yes | **80** | yes | built | **built — 35,609 sales** |
-| Mecum | `mecum` | **robots.txt requires prior written permission — the operator holds it (2026-08-18)** | **116** | yes | built | **built + scheduled — per-event, sitemap-discovered, page-paginated. 17,878 records from 9 of 184 live events** |
-| RM Sotheby's | `rms` | yes | 17 | no (detail only) | built | **built — 2,676 sales + 17 listings** |
-| Gooding & Company | `good` | yes | 4 | no | **built (2026-08-16)** | **built — 2,030 sales, 41/41 auctions (COMPLETE)** |
-| Broad Arrow Auctions | `broadarrow` | yes | 1 | no (detail only) | **built (2026-08-17)** | **built — 252 sales + 172 listings, 8/33 events, see below** |
-| DuPont Registry | `dupont` | yes (needs real browser UA) | 23 (old route, now redirects) | yes (server-rendered) | **built (2026-08-17)** | **built — listings only, 4,786 VDPs, sitemaps 1–6 of 15, see below** |
-| Bonhams | `bon` | **yes — robots.txt permits** | **85** | no (detail only) | **built + scheduled (2026-08-18)** | sitemap-enumerated (11,353 auctions), one request per auction + one per extra page of 48 lots. **Beware: `auctionLots` is page 1 only — see below** |
+| Bring a Trailer | `bat` | yes | **347** | yes | built | **built — 162,582 sales; all 224 partition x sort units complete, 11 partitions still capped by BaT's own 10k ceiling. Lot-page enrichment via `bat-detail` (2026-08-19)** |
+| Cars & Bids | `cab` | yes | **80** | yes | built | **built — 35,788 sales** |
+| Mecum | `mecum` | **robots.txt requires prior written permission — the operator holds it (2026-08-18)** | **116** | yes | built | **built, RUN BY HAND (no cron stage) — per-event, sitemap-discovered, page-paginated. 49,038 sales from 55 of 186 discovered events** |
+| RM Sotheby's | `rms` | yes | 17 | no (detail only) | built | **built — 2,753 sales + 17 listings** |
+| Gooding & Company | `good` | yes | 4 | no | **built (2026-08-16)** | **built — 2,046 sales, 41/41 auctions (COMPLETE)** |
+| Broad Arrow Auctions | `broadarrow` | yes | 1 | no (detail only) | **built (2026-08-17)** | **built — 405 sales + 174 listings, 975 of ~2,730 lots, see below** |
+| DuPont Registry | `dupont` | yes (needs real browser UA) | 23 (old route, now redirects) | yes (server-rendered) | **built (2026-08-17)** | **built — listings only, 4,852 listings from 5,969 of 13,814 sitemap URLs, see below** |
+| Bonhams | `bon` | **yes — robots.txt permits** | **85** | no (detail only) | **built + scheduled (2026-08-18)** | **9,864 sales.** Sitemap-enumerated (11,353 auctions; 4,359 visited, 230 were car sales, 4,054 another department), one request per auction + one per extra page of 48 lots. **Beware: `auctionLots` is page 1 only — see below** |
 | Sotheby's Motorsport | `sms` | yes | 18 | yes | **built (2026-08-16)** | **built — CAPPED at 15/request anonymous of 729 lots, see below** |
 | Classic.com | `classic` | **yes — robots.txt fully permissive** | 40 | yes | **lead adapter (staging only)** | **built — aggregator leads only; never authoritative sales** |
 | Collecting Cars | `collectingcars` | **robots.txt: `Allow: /` for `*`, but names `ClaudeBot` + `anthropic-ai` → `Disallow: /`** | 0 | no | — | **not built — see the note on named-AI blocks below** |
@@ -30,10 +30,11 @@ They are not equivalent, and the difference decides what a hand-written scraper 
 1. **Permission-gated, and the permission was obtained.** Mecum's `robots.txt` prose prohibits
    automated collection *"without prior written permission from Mecum Auctions"* and bars use for
    developing software/ML/AI. The operator holds that written permission as of **2026-08-18**,
-   which is the only reason `crawler/mecum.event.crawler.js` exists and is scheduled. This is a
-   grant to a NAMED PARTY, not a general finding: **if it lapses, drop `scrape:mecum` from
-   `jobs/stages.js`** — the standing data stays, collection stops. Do not read this row as
-   precedent for the two below.
+   which is the only reason `crawler/mecum.event.crawler.js` exists. This is a grant to a NAMED
+   PARTY, not a general finding: **if it lapses, stop running it** — the standing data stays,
+   collection stops. ⚠️ It is currently run BY HAND: there is no `scrape:mecum` stage in
+   `jobs/stages.js`, even though the crawler's header and earlier revisions of these notes say
+   there is. Do not read this row as precedent for the two below.
 2. **Named AI-crawler blocks.** Collecting Cars and PCAR set `User-agent: *` → `Allow: /`
    (Collecting Cars even sets `Crawl-delay: 1`) and then separately `Disallow: /` for
    `ClaudeBot`, `anthropic-ai`, `GPTBot`, `CCBot`. Those rules are aimed at AI crawlers. Nothing
@@ -82,25 +83,37 @@ Two land mines worth naming:
 
 ⚠️ **The table that used to sit here was measured on a hand-checked sample of a few records per
 source and was wildly wrong at scale** — it claimed BaT mileage 81% and Bonhams VIN 100%. Below
-is the whole corpus, counted from the database (2026-08-18, `scratchpad/per-source.js` shape:
+is the whole corpus, counted from the database (re-counted 2026-08-19; shape:
 `COUNT(*) WHERE field IS NOT NULL AND field != ''`, grouped by source). Re-run it rather than
 trusting any transcribed copy.
 
-| Field | bat | cab | bon | mecum | rms | good | broadarrow | sms |
+| Field | bat | mecum | cab | bon | rms | good | broadarrow | sms |
 |---|---|---|---|---|---|---|---|---|
-| **rows** | **162,261** | **35,766** | **8,265** | **7,309** | **2,749** | **2,043** | **351** | **25** |
+| **rows** | **162,582** | **49,038** | **35,788** | **9,864** | **2,753** | **2,046** | **405** | **25** |
 | price / sold_at | 100% | 100% | 100% | 100% | 100% | 100% | 100% | 100% |
-| mileage | 0% | 100% | 0% | 0% | 0% | 0% | 0% | 0% |
-| vin | 0% | 0% | 7% | 0% | 0% | 0% | 78% | 0% |
-| transmission | 0% | 38% | 0% | 0% | 0% | 0% | 0% | 0% |
-| color | 0% | 0% | 0% | 0% | 0% | 0% | 0% | 0% |
-| image_url | 100% | 100% | 100% | 0% | 0% | 0% | 0% | 100% |
-| price_usd | 100% | 100% | 82% | 100% | 100% | 100% | 100% | 100% |
+| mileage | 2.4% | 0.03% | 99.5% | 0.04% | 0% | 0% | 0% | 0% |
+| vin | 4.0% | 0.03% | 0% | 7.2% | 0% | 0% | 78.3% | 0% |
+| transmission | 3.1% | 0.03% | 38.4% | 0.05% | 0% | 0% | 0% | 0% |
+| color | 3.8% | 0.03% | 0% | 0.01% | 0% | 0% | 0% | 0% |
+| image_url | 99.9% | 0% | 100% | 99.8% | 0% | 0% | 0% | 100% |
+| price_usd | 100% | 100% | 100% | 81.4% | 100% | 100% | 100% | 100% |
 
-**Cars & Bids remains the highest-quality source** - 100% mileage, the only source that gives it
-at volume. **BaT is 74% of the corpus and supplies 0% mileage**, which is the single biggest
-quality constraint in the system: the odometer is on its detail page, not the list API the
-crawler uses.
+**Cars & Bids remains the highest-quality source** - 99.5% mileage, the only source that gives it
+at volume. **BaT is 62% of the corpus and Mecum another 19%, and between them they supply an
+odometer on well under 3%.** Corpus-wide mileage coverage actually FELL, 16.3% -> 15.0%, when
+Mecum arrived: 49k real sales, almost none with an odometer. That is the single biggest quality
+constraint in the system. BaT's number is now moving (0.04% -> 2.4%) because
+`crawler/bat-detail.crawler.js` reads the lot page the list API cannot supply; Mecum and Bonhams
+have the same hole and no equivalent harvester yet.
+
+BaT's nonzero vin/transmission/color columns are the same enrichment: 10,263 lot pages fetched,
+8,912 clean, 809 with no details block, 518 rejected on a price mismatch, 24 on a title mismatch.
+More rows gain a VIN than an odometer, which is expected — pre-1981 chassis plates outnumber
+trustworthy odometers on that corpus, and TMU readings are refused rather than stored.
+
+**Bonhams' `price_usd` at 81.4% is correct, not a gap.** All 1,838 unconverted rows are
+`price = 0` bought-in lots (`status = reserve_not_met`): no published bid, so there is nothing to
+convert. Every priced sale in the database converts.
 
 **`price_usd` is no longer a gap.** It was 68% on RM, 60% on Broad Arrow and 93% on Gooding -
 the international sales whose EUR/GBP/CHF prices were never converted. `fx/` now converts at the
@@ -139,8 +152,17 @@ falling back to title parsing only when they are absent.
 - **cab** — three outcome states, not two: `sold`, `sold_after`, `reserve_not_met`. Measured
   3 of 5 sampled lots ended reserve-not-met, verified against the live page. This is why the
   `sale.status` column is an enum rather than DriveIndex's boolean.
-- **mecum** — no ISO timestamp anywhere; the date must be assembled from the lot's crossing
-  day (`THURSDAY, AUGUST 13TH`) plus the year in the auction name (`MONTEREY 2026`).
+- **mecum** — no ISO timestamp anywhere; the date is resolved once per EVENT (state file, then
+  the event page's og:description, e.g. "…in Dallas, TX on September 4-7, 2024" — last day wins).
+- **mecum** — **car events carry memorabilia inline.** Measured on the sitemap-scale harvest:
+  3,273 of ~19k records had no model year at all — porcelain signs, pedal cars, tether cars, tool
+  kits, badges, neon. Left in, every one floods the review queue as `UNPARSEABLE`, the same
+  failure mode that drove BaT's taxonomy-level category exclusion.
+- **mecum** — **`$1` is an undisclosed/charity sentinel, not a price** (a 1931 Cadillac V16 Coach
+  at $1, a 1941 Harley at $1). Same call as Gooding's `salePrice: 1`. Real $59 hammers on cheap
+  memorabilia are unaffected: the gate is `price <= 1`.
+- **mecum** — **"Bid Goes On" is checked BEFORE the price**, because such a card can also display
+  a high-bid figure and a high bid is not a hammer price.
 - **bon** — prices are shown **inc. premium** (all-in), unlike hammer-price sources. Matters
   for cross-source dedup, which allows a 2–13% band for exactly this hammer-vs-all-in gap.
 - **bon** — mixes non-car lots into car auctions (a 1967 Vollstedt-Ford Indy chassis, a 1936
@@ -153,11 +175,24 @@ falling back to title parsing only when they are absent.
 Every source that CAN be crawled now is. What remains splits into three kinds of work, and the
 first kind matters more than the other two put together.
 
-### 1. Fix the biggest quality hole: BaT has no mileage
+### 1. Fix the biggest quality hole: BaT has no mileage — BUILT (2026-08-19)
 
-**BaT is 74% of the corpus and supplies mileage on 0% of it.** Cars & Bids is the only source
-that provides it at volume (100%, 35,600 rows); corpus-wide only 16.3% of sales carry an
-odometer reading.
+**`crawler/bat-detail.crawler.js` closes this.** One GET per lot page harvests the
+server-rendered "Listing Details" sidebar — odometer, chassis/VIN, transmission, paint — with
+every page validated before anything is written (og:title must match the record after
+normalising BaT's own formatting variance: the `No Reserve: ` prefix and entity-encoded list
+titles; the page's `<title>` hammer price must agree with the record; VIN passes
+`isValidVin`; TMU/kilometre/ambiguous-transmission rules per `crawler/bat-detail.test.js`).
+Paced 1.5s + jitter with an adaptive backoff ratchet; resumable per-lot state; scheduled as
+`scrape:bat-detail` (150 lots/run) so cron drains the backlog without hammering. Enrichment
+lands on already-ingested rows via ingest's extended COALESCE upsert. First live run: 59/60
+lots enriched, odometer median 53k (no low-mileage bias — the title-regex trap avoided).
+
+**Measured 2026-08-19, after 10,263 lot pages: BaT mileage is 2.4% and climbing.** At the
+scheduled 150 lots/run the remaining ~152k lots are a long grind, so this closes gradually.
+Cars & Bids is still the only source that provides mileage at volume (99.5%, 35,788 rows).
+**Corpus-wide coverage FELL to 15.0%** when Mecum's 49k odometer-less sales arrived — the hole
+is now two sources wide, not one, and Mecum has no detail-page harvester.
 
 That is not cosmetic. `engine/signal.js` mileage-adjusts every price before fitting a trend, and
 a sale with no odometer falls back to `ctx.avgMiles` — i.e. it is treated as AVERAGE for its car.
@@ -172,16 +207,21 @@ value work left in the project.**
 
 ### 2. Push past the ceilings on sources already built
 
-- **BaT sub-partitioning.** Multi-sort is DONE — all 56 partitions x 4 sorts (`td/ta/vd/bd`) are
-  complete. But 11 partitions are still over BaT's own 10,000-result cap (German/sold 69,897;
-  American/sold 66,497), so 4 sorts reach at most 40k of each. Going further needs partitions
-  narrower than 10k — by year or price band inside a category — not more sorts.
+- **BaT sub-partitioning.** Multi-sort is DONE — all 56 partitions x 4 sorts (`td/ta/vd/bd`),
+  224 units, complete. But 11 partitions are still over BaT's own 10,000-result cap (German/sold
+  ~69.9k; American/sold ~66.5k), so 4 sorts reach at most 40k of each. Going further needs
+  partitions narrower than 10k — by year or price band inside a category — not more sorts.
+- **Mecum coverage.** 55 of 186 discovered events fully harvested (56,929 lots walked, 49,038
+  became sales after the automobilia / `$1` sentinel / reserve-not-met gates). This is the
+  largest remaining block of data in the project and needs no new code — but note it is **not a
+  cron stage**, so nothing advances it unless someone runs it.
 - **Sotheby's Motorsport.** Anonymous access is capped at 15 results per request against 729
   lots. Needs either an authenticated route or acceptance of the cap.
-- **Backlogs**, which now close on their own via cron but are not finished:
-  Bonhams 4,359 / 11,353 auction ids - Broad Arrow 975 / ~2,730 lots - DuPont 5,969 / 13,814.
+- **Backlogs**, which close on their own via cron: Bonhams 4,359 / 11,353 auction ids -
+  Broad Arrow 975 / ~2,730 lots - DuPont 5,969 / 13,814 URLs.
 - **`non_us_sale` from a real country field** in `broadarrow`, `gooding` and `sms`. They still
   derive it from currency, which is wrong in both directions (see the Bonhams note below).
+  Mecum is US-only in practice, so the proxy costs nothing there today.
 
 ### 3. Sources not built, and why — none of them are merely "unwritten"
 
@@ -190,14 +230,15 @@ value work left in the project.**
 | Classic.com | robots.txt fully permissive | Buildable today. But it is an AGGREGATOR (`SOURCE_TRUST 9`) — useful for staging/cross-checking, never authoritative, so it adds breadth not truth. |
 | Collecting Cars | `Allow: /` for `*`, but names `ClaudeBot` + `anthropic-ai` -> `Disallow: /` | A **Terms of Service** decision, not an engineering one. Nothing in this repo crawls it. |
 | PCAR Market | names `ClaudeBot`, `Disallow: /` | Same as above. |
-| Mecum | permission-gated; operator holds written permission (2026-08-18) | **Not blocked — built and scheduled.** What remains is coverage, not access: 172 of 184 live events unvisited, and both Kissimmee sales stopped on the 400-page cap. |
+| Mecum | permission-gated; operator holds written permission (2026-08-18) | **Not blocked — built.** What remains is coverage, not access: 131 of 186 discovered events are unfinished. ⚠️ It is **not scheduled** — there is no `scrape:mecum` in `jobs/stages.js`, despite the crawler's own header saying otherwise. |
 | Barrett-Jackson | `robots.txt` itself 403s | Permission cannot be established. Needs a data agreement. |
 | Hagerty Marketplace | `robots.txt` itself 403s | Same. |
 | Cars.com | `robots.txt` itself 403s | Same. |
 
-So of the 13 sources, 8 carry sales, 1 is a buildable aggregator, and **4 are closed for
-permission reasons rather than for want of a crawler**. Do not treat a 403 as a puzzle to
-solve — that is how a scraping project becomes a legal problem.
+So of the 13 sources, 8 carry sales (262,501 of them, 2026-08-19), 1 is a buildable aggregator,
+and **4 are closed for permission reasons rather than for want of a crawler**. Weighted by
+DriveIndex's own measured source mix, the 8 we hold represent **96.2%** of it. Do not treat a 403
+as a puzzle to solve — that is how a scraping project becomes a legal problem.
 
 ---
 
@@ -379,7 +420,9 @@ use the closing day, same policy as Gooding/RM.
 that rate is ~7.5 hours. `crawler/broadarrow.crawler.js [eventCodePrefix]` takes an event-code
 prefix (from the URL, e.g. `jc22`) so the work is done one bounded event at a time.
 
-**Progress (2026-08-17): 8 of 33 events, 252 sales + 172 listings.** The sitemap's 2,694 vehicle
+**Progress (2026-08-19): 405 sales + 174 listings from 975 of ~2,730 lots.** Now a cron stage
+(`scrape:broadarrow auto`), so it advances to the next unfinished event on its own rather than
+re-confirming one passed on the command line. The sitemap's 2,694 vehicle
 pages span 33 distinct event codes; a survey of all of them is in
 `_archive`-adjacent scratch work, but the counts are recoverable by re-running the sitemap fetch.
 Events harvested: `jc22`, `po26`, `gi26u`, `gi26e`, `lv25`, `dg25`, `mb26`, `ql26`, `zt26`,
@@ -436,11 +479,13 @@ about DuPont (§3: it flags a risk of asks leaking into sold-price maths — not
 seen on at least one real listing (a 1967 Porsche 911) where the actual VIN isn't disclosed.
 Adapter nulls it out rather than feeding it to `normalizeVin()`.
 
-**Progress (2026-08-17): 4,786 listings from sitemaps 1–6 of 15.** ~900 real listings per
-sitemap run, with 67–104 skipped each time (`no price posted (call for price / not disclosed)` is
-the dominant reason, plus a few pages with no parseable `listingData`). Sitemaps 7–15 (~9,000
-more URLs) are untouched. `crawler/dupont.crawler.js [sitemapN] [maxUrls]` resumes per-URL via
-`samples/dupont.state.json`, so re-running is safe and never re-fetches.
+**Progress (2026-08-19): 4,852 listings from 5,969 of 13,814 sitemap URLs.** ~900 real listings
+per sitemap run, with 67–104 skipped each time (`no price posted (call for price / not
+disclosed)` is the dominant reason, plus a few pages with no parseable `listingData`).
+`crawler/dupont.crawler.js [sitemapN|auto] [maxUrls]` resumes per-URL via
+`samples/dupont.state.json`, so re-running is safe and never re-fetches; `auto` is what the cron
+stage passes, and it advances to the next unfinished sitemap rather than re-confirming a done
+one.
 
 **Best field coverage of any source we have**: `mileage` 96.2% and `vin` 98.7% on DuPont rows,
 against 16.9% / 0.1% respectively across the whole `sale` table. It contributes no sold prices,
@@ -534,7 +579,8 @@ keyword; `validation/fix-identifier-clause-models.js` repaired the rows already 
 RM Sotheby's has the same habit (its slugs lead with a chassis code) — assume any classic house
 does, and check `model_key` for digits that look like a serial before trusting a harvest.
 
-Bonhams is **international**: **4,603 of 7,567 sold lots (60.8%) are GBP/EUR/CHF**, and its lots
+Bonhams is **international**: **4,620 of 7,495 sold lots (61.6%) are GBP/EUR/CHF** — the whole
+corpus's FX exposure sits in this one source — and its lots
 carry a real per-lot `country.code` (GB 4,372 · US 3,682 · FR 1,301 · BE 668 · CH 361 · ...).
 
 FX is now solved — `fx/fetch-ecb-rates.js` stores the ECB daily reference series and
@@ -542,12 +588,69 @@ FX is now solved — `fx/fetch-ecb-rates.js` stores the ECB daily reference seri
 backfilled with zero conversion failures. What that did NOT do is make those sales count:
 `engine/clean.js` has a second, independent gate, `non_us_sale`, and a London lot fails it no
 matter how correct its dollar price is. Keeping that gate is a deliberate choice (US-market
-index, matching their [V] predicate) and it costs 8,193 priced sales — see the README table.
+index, matching their [V] predicate) and it costs **8,954** priced sales as of 2026-08-19 —
+see the README table.
 
 ⚠️ **Do not derive `non_us_sale` from currency.** It means WHERE the lot sold. Bonhams proves the
 proxy wrong in both directions: 33 lots sold in the UAE **in USD**, and 78 sold in Great Britain
 **priced in EUR**. `bat` and `bon` read a real country field; `broadarrow`, `gooding` and `sms`
 still use the currency proxy and should be switched wherever their source exposes a country.
+
+## Mecum: their own sitemap is the event index, and the front gates matter more than the walk (2026-08-19)
+
+7,309 -> **49,038 sales**, and it is what pushed the corpus's earliest sale back from 2014 to
+**2012-08-18**. Permission-gated (see the top of this file) and run BY HAND — there is no cron
+stage. `crawler/mecum.event.crawler.js` + `crawler/mecum-adapt.js`.
+
+**Discovery — their sitemap, not slug guessing.** `robots.txt` declares `sitemap-index.xml`,
+whose `auction-sitemap{1..3}.xml` list **257 distinct auction slugs back to 2012**. This retired
+the old guessing approach, which failed on 5 of 14 because the pattern is NOT `{city}-{year}`:
+2017-2023 Indianapolis sales are `indianapolis-YYYY` while 2020/2024/2025 are `indy-YYYY`. Two
+`indy-20NN` slugs stay marked `dead` in the state file for exactly this reason. Upcoming short
+codes on `/results/` (CA26, FL27) never appear in the sitemap with a year suffix and are not past
+results, so they are not enumerated.
+
+**Route.** The SEARCH route (`/search/?saleResult[0]=sold`) is a dead end: no prices, no pager,
+and its links point at auction pages rather than lots. The real archive is per event,
+`/auctions/{event}/lots/?page=N`, up to ~4,400 lots for a Kissimmee. Lot cards are
+CLIENT-rendered (plain HTTP returns zero lot links) so the card walk uses Playwright; everything
+server-rendered — sitemaps, the event landing page — uses plain fetch, which is faster and
+politer.
+
+**Selector policy.** Their class names are CSS-module hashed (`CardLot-module__NbNTua__card`,
+where the hash changes every deploy), so selection is STRUCTURAL: an `<article>` holding a link
+matching `/lots/{id}/{slug}/`. That survives a restyle.
+
+**Date, per EVENT.** Lot cards carry none. Resolved from the state file first, then the event
+landing page's og:description ("...in Dallas, TX on September 4-7, 2024" — LAST day of the range,
+same policy as RM/Gooding/Broad Arrow). Mecum previously ran at 0% `sold_at`, which silently
+removed every Mecum sale from trend maths; it is now 100%.
+
+### The three adapter gates, and why each was written the way it was
+
+These run BEFORE the price and date gates, so the skip reason reported is the true one.
+
+1. **Automobilia.** Big car events carry memorabilia inline — 3,273 of ~19k records had no model
+   year: porcelain signs, pedal and tether cars, tool kits, badges, gas pumps, neon. Left in,
+   every one lands in the review queue as `UNPARSEABLE`, one sign at a time. The resolver's
+   component head-noun rule stays authoritative for anything that slips past; this is the cheap
+   bounded front gate, keyed on OBJECT phrases only.
+   ⚠️ **Every pattern was checked against a real car name it would destroy.** Bare `neon` is a
+   Plymouth Neon; bare `model` is a Ford Model T; bare `manual` is "5-Speed Manual"; `sign`
+   without `\b` matches AMG "Designo"; `print` without `\b` matches "Sprint" trims; bare `kit`
+   is a kit-car replica, which is the review queue's judgement call, not the adapter's. Hence
+   `sign\b`, `model\s+(kit|by)`, `owner's manual`, and no bare `neon`/`kit`. One real title
+   shows why make-detection cannot substitute for this: *"1950S Ford A 1 Used Cars Double Sided
+   Dealership Sign"* — a make word printed on a SIGN.
+2. **`$1` sentinel.** Mecum publishes undisclosed and charity results as $1 — measured: a 1931
+   Cadillac V16 Coach at $1, a 1941 Harley at $1. Ingested, that drags the car's entire price
+   curve toward zero. Same call as Gooding's `privateSalesPrice` / `salePrice: 1`. Gate is
+   `price <= 1`, so genuine $59 hammers on cheap memorabilia are unaffected.
+3. **"Bid Goes On" before price.** A reserve-not-met card can also display a high-bid figure. A
+   high bid is not a hammer price, so the outcome label is checked first.
+
+**Coverage: 55 of 186 events complete, 56,929 lots walked.** What remains is coverage, not
+access. `crawler/mecum-adapt.test.js` and `crawler/mecum-automobilia.test.js` lock the gates.
 
 ## PCAR Market: explicitly blocked, not just unbuilt (2026-08-17)
 
