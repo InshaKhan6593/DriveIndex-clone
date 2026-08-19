@@ -44,21 +44,21 @@ export function PriceHistoryChart({ sales }: { sales: Sale[] }) {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex justify-end gap-1">
+    <div className="flex min-w-0 max-w-full flex-col gap-3">
+      <div className="flex max-w-full justify-start gap-1 overflow-x-auto pb-1 sm:justify-end">
         {RANGES.map((r) => (
           <Button
             key={r.key}
             size="sm"
             variant={range === r.key ? "default" : "ghost"}
-            className="h-7 px-2.5 text-xs"
+            className="h-7 shrink-0 px-2.5 text-xs"
             onClick={() => setRange(r.key)}
           >
             {r.key}
           </Button>
         ))}
       </div>
-      <ChartContainer config={chartConfig} className="aspect-auto h-[260px] w-full">
+      <ChartContainer config={chartConfig} className="aspect-auto h-[260px] w-full min-w-0">
         <ComposedChart data={points} margin={{ left: 4, right: 12, top: 8 }}>
           <CartesianGrid vertical={false} />
           <XAxis

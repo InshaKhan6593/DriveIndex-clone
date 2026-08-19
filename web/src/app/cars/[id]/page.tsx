@@ -118,8 +118,8 @@ export default async function CarDetailPage({ params }: { params: Promise<{ id: 
         {/* Two columns from here down: left = the long-form content you scroll through
             (chart, sales/listings, seasonality, repricer), right = the at-a-glance stats,
             sticky so they stay visible while the left column scrolls. */}
-        <div className="grid lg:grid-cols-3 gap-6 items-start">
-          <div className="lg:col-span-2 flex flex-col gap-6">
+        <div className="grid min-w-0 items-start gap-6 lg:grid-cols-3">
+          <div className="flex min-w-0 flex-col gap-6 lg:col-span-2">
             <Card>
               <CardHeader>
                 <CardTitle>Price History</CardTitle>
@@ -170,7 +170,7 @@ export default async function CarDetailPage({ params }: { params: Promise<{ id: 
             )}
           </div>
 
-          <div className="flex flex-col gap-6 lg:sticky lg:top-6">
+          <div className="flex min-w-0 flex-col gap-6 lg:sticky lg:top-6">
             {hasForecast && (
               <Card>
                 <CardHeader>
