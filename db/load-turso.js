@@ -71,6 +71,13 @@ if (hasPrev) {
 const Database = require("libsql");
 const remote = new Database(URL, { authToken: TOKEN });
 
+function sqlLiteral(value) {
+  if (value == null) return "NULL";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "NULL";
+  if (typeof value === "bigint") return String(value);
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
 // The remote database may be empty on a first run. schema.sql is the one definition of the shape,
 // so it is replayed rather than duplicated here — CREATE TABLE IF NOT EXISTS makes it a no-op
 // afterwards. Statements are split on semicolons at line ends to keep CHECK constraints intact.
@@ -141,7 +148,6 @@ for (const table of TABLES) {
 
   const cols = writableColumns(table);
   const colList = cols.map((c) => `"${c}"`).join(", ");
-  const placeholders = cols.map(() => "?").join(", ");
 
   // Whole-row EXCEPT: catches inserts AND in-place edits to any column, without having to know
   // which columns a given release happens to change.
@@ -178,34 +184,22 @@ for (const table of TABLES) {
     continue;
   }
 
-  const insert = remote.prepare(
-    `INSERT OR REPLACE INTO "${table}" (${colList}) VALUES (${placeholders})`
-  );
   // Deletions are NOT applied here. They are queued and run after every table's inserts, in
   // reverse dependency order — deleting a car while its sales still reference it fails on the
   // foreign key. (Found the hard way: the obvious per-table loop deletes parents before children.)
   if (deletedIds.length) pendingDeletes.push({ table, pk, ids: deletedIds });
 
-  // Batched transactions rather than one giant one: a single transaction over 300k rows on a
-  // first load is a very long-held remote write lock and a single point of failure. 1,000 rows
-  // per commit keeps each round trip small and makes a mid-run failure resumable by re-running.
-  const BATCH = 1000;
+  // The remote libSQL driver does not keep transactions open across separate calls. Use one
+  // multi-row INSERT per batch instead: it is atomic at the statement level and avoids one
+  // network round trip per row on the first load.
+  const BATCH = 250;
   for (let i = 0; i < changed.length; i += BATCH) {
     const slice = changed.slice(i, i + BATCH);
-    remote.exec("BEGIN");
+    const values = slice.map((row) => `(${cols.map((c) => sqlLiteral(row[c])).join(", ")})`).join(",\n");
     try {
-      for (let j = 0; j < slice.length; j++) {
-        try {
-          insert.run(...cols.map((c) => slice[j][c]));
-        } catch (err) {
-          throw new Error(`${table} row ${i + j} failed: ${err.message || err}`, { cause: err });
-        }
-      }
-      remote.exec("COMMIT");
+      remote.exec(`INSERT OR REPLACE INTO "${table}" (${colList}) VALUES\n${values};`);
     } catch (err) {
-      // Preserve the insert error when the remote driver has already ended the transaction.
-      try { remote.exec("ROLLBACK"); } catch { /* already rolled back by the driver */ }
-      throw err;
+      throw new Error(`${table} rows ${i}-${i + slice.length - 1} failed: ${err.message || err}`, { cause: err });
     }
     process.stdout.write(`\r${table.padEnd(22)} ${Math.min(i + BATCH, changed.length)}/${changed.length}   `);
   }
@@ -222,14 +216,13 @@ for (const table of TABLES) {
 // FOREIGN KEY constraint failed. Doing this per-table inside the loop above would have hit that
 // on the first day a car was ever retired, and aborted the whole load.
 for (const job of pendingDeletes.reverse()) {
-  const del = remote.prepare(`DELETE FROM "${job.table}" WHERE "${job.pk}" = ?`);
-  remote.exec("BEGIN");
-  try {
-    for (const id of job.ids) del.run(id);
-    remote.exec("COMMIT");
-  } catch (err) {
-    try { remote.exec("ROLLBACK"); } catch { /* already rolled back by the driver */ }
-    throw err;
+  for (let i = 0; i < job.ids.length; i += 250) {
+    const ids = job.ids.slice(i, i + 250).map(sqlLiteral).join(", ");
+    try {
+      remote.exec(`DELETE FROM "${job.table}" WHERE "${job.pk}" IN (${ids});`);
+    } catch (err) {
+      throw new Error(`${job.table} deletions ${i}-${Math.min(i + 249, job.ids.length - 1)} failed: ${err.message || err}`, { cause: err });
+    }
   }
   console.log(`deleted ${String(job.ids.length).padStart(7)} from ${job.table}`);
 }
