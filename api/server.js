@@ -23,6 +23,31 @@ const app = express();
 app.use(cors());
 const db = openDb();
 
+// An index at the root, because every route here is under /api and Express answers a bare "/"
+// with "Cannot GET /" — which reads as a broken deployment to anyone who opens the URL, including
+// whoever is debugging it six months from now. This says "the API is up, here is what it serves"
+// instead. Deliberately does NOT touch the database: /api/health is the probe that does that, and
+// this must stay answerable even when the database is unreachable, so the two failures can be
+// told apart at a glance.
+app.get("/", (req, res) => {
+  res.json({
+    service: "driveindex-api",
+    ok: true,
+    note: "Read-only API. Data is served from a snapshot built by the daily pipeline.",
+    endpoints: [
+      "/api/health",
+      "/api/cars",
+      "/api/cars/:id",
+      "/api/cars/:id/reprice",
+      "/api/trending",
+      "/api/deals",
+      "/api/compare",
+      "/api/search",
+      "/api/stats/public",
+    ],
+  });
+});
+
 const YEAR_BUCKETS = {
   pre70: "c.year < 1970",
   "70s": "c.year BETWEEN 1970 AND 1979",
