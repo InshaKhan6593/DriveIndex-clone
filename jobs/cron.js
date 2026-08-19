@@ -27,6 +27,24 @@
 //   node jobs/cron.js --no-scrape     # ingest + compute only
 //   node jobs/cron.js --status        # show lock state and recent history
 //   node jobs/cron.js --release       # force-release a stale lock
+//
+//   node jobs/cron.js --skip=scrape:cab,scrape:dupont      # run everything EXCEPT these
+//   node jobs/cron.js --only=fx,ingest,compute             # run ONLY these
+//   node jobs/cron.js --deadline-minutes=300               # see DEADLINE below
+//
+// --skip and --only exist because not every environment may run every stage. The daily GitHub
+// Actions run skips the three sources that need a residential IP or a named-party permission
+// (Cars & Bids' Cloudflare check, DuPont's bot filter, Mecum's written grant) and the BaT
+// detail crawler, which rewrites a 198MB harvest file in place and is therefore local-only.
+// --skip is the right flag for that policy: it names what is EXCLUDED, so a stage added later
+// runs by default rather than being silently dropped from a hardcoded allowlist.
+//
+// DEADLINE. A CI runner is killed at a hard wall-clock limit (GitHub Actions: 6 hours), and a
+// run killed mid-compute publishes nothing at all — the scrape time is wasted. --deadline-minutes
+// stops STARTING new optional scrape stages once elapsed time passes it, so ingest and compute
+// are always reached. Backlogs then drain over subsequent days, which is how the crawlers are
+// designed to work anyway. It never interrupts a stage already running: each stage has its own
+// budget, and killing one mid-write is what the state files are there to avoid.
 
 "use strict";
 
@@ -163,8 +181,37 @@ if (!got.ok) {
 }
 
 const noScrape = process.argv.includes("--no-scrape");
+
+function listArg(name) {
+  const raw = process.argv.find((a) => a.startsWith(`--${name}=`));
+  if (!raw) return null;
+  const items = raw.slice(name.length + 3).split(",").map((x) => x.trim()).filter(Boolean);
+  return items.length ? items : null;
+}
+const skipList = listArg("skip");
+const onlyList = listArg("only");
+
+// Fail loudly on a name that matches no stage. A typo in a CI workflow would otherwise silently
+// mean "skip nothing" — i.e. quietly scrape the very sources the flag exists to exclude.
+const known = new Set(STAGES.map((s) => s.name));
+for (const name of [...(skipList || []), ...(onlyList || [])]) {
+  if (!known.has(name)) {
+    console.error(`unknown stage: ${name}`);
+    console.error(`known stages: ${[...known].join(", ")}`);
+    process.exit(2);
+  }
+}
+
+const deadlineRaw = process.argv.find((a) => a.startsWith("--deadline-minutes="));
+const deadlineMin = deadlineRaw ? Number(deadlineRaw.split("=")[1]) : null;
+if (deadlineRaw && !(Number.isFinite(deadlineMin) && deadlineMin > 0)) {
+  console.error(`--deadline-minutes needs a positive number, got: ${deadlineRaw.split("=")[1]}`);
+  process.exit(2);
+}
+
 const started = Date.now();
 const results = [];
+let deadlineHit = false;
 
 process.on("exit", releaseLock);
 process.on("SIGINT", () => { releaseLock(); process.exit(130); });
@@ -173,6 +220,27 @@ console.log(`cron run ${got.lock.runId} (pid ${process.pid})\n`);
 
 for (const stage of STAGES) {
   if (noScrape && stage.name.startsWith("scrape:")) continue;
+  if (onlyList && !onlyList.includes(stage.name)) continue;
+  if (skipList && skipList.includes(stage.name)) {
+    console.log(`  ${stage.name.padEnd(14)} SKIPPED (--skip)`);
+    continue;
+  }
+
+  // Past the deadline, stop starting optional scrapes so the required tail (ingest, compute)
+  // still runs. Required stages are never skipped this way: a run that scrapes and then fails
+  // to compute has published nothing, which is worse than a run that scraped less.
+  if (deadlineMin && stage.optional) {
+    const elapsedMin = (Date.now() - started) / 60000;
+    if (elapsedMin >= deadlineMin) {
+      if (!deadlineHit) {
+        console.log(`
+  -- deadline of ${deadlineMin}min reached at ${elapsedMin.toFixed(1)}min; skipping remaining optional stages --`);
+        deadlineHit = true;
+      }
+      results.push({ stage: stage.name, klass: "SKIPPED", advice: `deadline ${deadlineMin}min reached — backlog drains next run`, exit: null, minutes: 0, summary: "", required: false });
+      continue;
+    }
+  }
 
   // A required stage is skipped if an earlier required stage failed — ingesting after a broken
   // scrape is fine, but computing on a failed ingest would publish half-built valuations.

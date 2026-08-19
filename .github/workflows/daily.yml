@@ -1,0 +1,295 @@
+# DAILY PIPELINE — every source, then ingest -> compute -> publish.
+#
+# WHY HERE AND NOT ON RENDER: Render's free tier has no cron jobs and no persistent disks, so it
+# cannot run this, and could not keep the 294MB working database between runs if it could.
+# GitHub Actions minutes are free and unlimited for PUBLIC repositories, which this one is.
+# If this repo is ever made private, this starts consuming the 2,000 min/month quota and a daily
+# run exceeds it in about a week — make the schedule weekly, or move the cron to a local machine.
+#
+# WHY A MATRIX RATHER THAN ONE LONG JOB: GitHub kills a job at 6 hours, and the full pipeline
+# budgets 505 minutes — one job cannot hold it. But the scrapers are independent: each writes its
+# own harvest file and its own resume marker, and only ingest touches the database. So they run in
+# PARALLEL, one runner each, and every source gets its own 6-hour budget instead of a slice of a
+# shared one. The `build` job then serialises what has to be serial.
+#
+# STATE: runners are ephemeral, so the working database, the resume markers, and the two harvest
+# files that crawlers actually read back are carried between runs as Release assets on the `state`
+# tag. Gzip does the heavy lifting — the database is 294MB raw / 77MB gzipped, and BaT's harvest
+# is 190MB raw / 16MB gzipped. Read DEPLOY.md before running any writing job locally, or the
+# local and cloud copies diverge silently.
+name: daily
+
+on:
+  schedule:
+    # 11:00 UTC = 16:00 (4 PM) Pakistan Standard Time, which is UTC+5 year-round (no DST).
+    # GitHub cron is UTC-only and best-effort: at busy times it starts 15-30 minutes late, and it
+    # is occasionally dropped entirely. Expected, not a bug to chase — every crawler is
+    # incremental, so whatever a missed day would have collected is absorbed by the next run.
+    - cron: "0 11 * * *"
+  workflow_dispatch:
+    inputs:
+      sources:
+        description: "Which sources to scrape: 'all', 'none', or a comma list e.g. bat,bonhams"
+        required: false
+        default: "all"
+      deadline_minutes:
+        description: "Per-source: stop starting new work after this many minutes"
+        required: false
+        default: "240"
+
+# A run takes hours. Two overlapping runs would fight over the same state release and the loser's
+# work would be silently discarded, so a late-starting run waits rather than racing.
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write # required to upload the snapshot and state release assets
+
+jobs:
+  # ── WHICH SOURCES TO RUN ──────────────────────────────────────────────────────────────────
+  # Turns the `sources` input into a matrix. Kept in one place so the scrape job below stays a
+  # plain matrix and the selection logic is readable and testable on its own.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+      any: ${{ steps.pick.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pick
+        env:
+          SOURCES: ${{ github.event.inputs.sources || 'all' }}
+        run: node .github/scripts/plan-sources.js >> "$GITHUB_OUTPUT"
+
+  # ── SCRAPE — one runner per source, all in parallel ───────────────────────────────────────
+  scrape:
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false # one auction site being down must not cancel the other nine
+      max-parallel: 6 # polite: do not open ten scrapers at once from one IP range
+      matrix:
+        source: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.20.0"
+          cache: npm
+
+      # Only Cars & Bids, Mecum and Classic drive a browser. Installing Chromium for the other
+      # seven would cost a few minutes per runner for nothing.
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.source }}" = "cab" ] || [ "${{ matrix.source }}" = "mecum" ]; then
+            npm ci
+            npx playwright install --with-deps chromium
+          else
+            npm ci --omit=dev
+          fi
+
+      - name: Restore resume markers
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p data samples/scraped samples/listings samples/staging
+          # Resume markers are what stop a crawler re-walking from the start. Small (~350KB).
+          if gh release download state --pattern 'crawler-state.tar.gz' --dir /tmp 2>/dev/null; then
+            tar -xzf /tmp/crawler-state.tar.gz
+            echo "resume markers restored"
+          else
+            echo "::warning::No crawler-state.tar.gz yet — this source will walk from the start."
+          fi
+          # A lock restored from another machine names a PID that means nothing on this runner.
+          rm -f data/cron.lock data/bat-detail.lock
+
+      # Only two crawlers READ their own harvest file back, and for different reasons:
+      #   cab  decides when to stop by looking for records it already has ("8 batches with
+      #        nothing new"). Without the file everything looks new and it walks all 40k lots.
+      #   bat  is where bat-detail writes its enrichment — it rewrites that file in place.
+      # Every other crawler resumes purely from its state marker and simply writes a delta, which
+      # ingest folds in idempotently on (source, source_lot_id).
+      - name: Restore harvest file
+        if: matrix.source == 'cab' || matrix.source == 'bat'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          case "${{ matrix.source }}" in
+            cab) ASSET=cars-and-bids.json.gz; DEST=samples/scraped/cars-and-bids.json ;;
+            bat) ASSET=bat-partitioned.json.gz; DEST=samples/scraped/bat-partitioned.json ;;
+          esac
+          if gh release download state --pattern "$ASSET" --dir /tmp 2>/dev/null; then
+            gunzip -c "/tmp/$ASSET" > "$DEST"
+            node -e "console.log('restored', require('./$DEST').length, 'records')"
+          else
+            echo "::warning::$ASSET missing — ${{ matrix.source }} starts from an empty harvest."
+          fi
+
+      - name: Scrape
+        env:
+          DELAY_MS: "2500"
+        run: |
+          set -uo pipefail
+          DEADLINE="${{ github.event.inputs.deadline_minutes || '240' }}"
+          # BaT runs its detail-page enrichment straight after the list walk, in the same job:
+          # both read and rewrite bat-partitioned.json, so they must never run concurrently.
+          if [ "${{ matrix.source }}" = "bat" ]; then
+            ONLY="scrape:bat,scrape:bat-detail"
+          else
+            ONLY="scrape:${{ matrix.source }}"
+          fi
+          node jobs/cron.js --only="$ONLY" --deadline-minutes="$DEADLINE" 2>&1 | tee /tmp/scrape.log
+          code=${PIPESTATUS[0]}
+          # cron.js: 0 clean, 1 an optional source failed, 2 the pipeline itself failed. A source
+          # being unreachable is a normal day, so only 2 fails this job.
+          if [ "$code" -ge 2 ]; then exit 1; fi
+
+      # Everything this source produced, handed to the build job. Harvest files are deltas for
+      # most sources and the full file for bat/cab; either way ingest is idempotent.
+      - name: Upload harvest and markers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harvest-${{ matrix.source }}
+          path: |
+            samples/scraped/*.json
+            samples/listings/*.json
+          if-no-files-found: ignore
+          retention-days: 3
+
+  # ── BUILD — ingest, recompute, publish. Serial by nature: one database. ───────────────────
+  build:
+    needs: [plan, scrape]
+    # always() so a dead auction site does not stop the day's recompute and publish. Without it,
+    # one failed scrape would mean no snapshot at all.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.20.0"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --omit=dev
+
+      - name: Restore working database
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p data samples/scraped samples/listings samples/staging
+          if ! gh release download state --pattern 'driveindex.sqlite.gz' --dir /tmp 2>/dev/null; then
+            echo "::error::No 'state' release found. This workflow CONTINUES an existing corpus"
+            echo "::error::(262k+ sales). It must never start from an empty database - that would"
+            echo "::error::re-scrape everything from zero and lose all resolved history."
+            echo "::error::Seed it once: see DEPLOY.md -> Seeding the state release"
+            exit 1
+          fi
+          gunzip -c /tmp/driveindex.sqlite.gz > data/driveindex.sqlite
+          gh release download state --pattern 'crawler-state.tar.gz' --dir /tmp 2>/dev/null && tar -xzf /tmp/crawler-state.tar.gz || true
+          rm -f data/cron.lock data/bat-detail.lock
+          node -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('data/driveindex.sqlite',{readOnly:true});console.log('restored:',d.prepare('SELECT COUNT(*) n FROM sale').get().n,'sales,',d.prepare('SELECT COUNT(*) n FROM car').get().n,'cars')"
+
+      # merge-multiple: every source's artifact unpacks into the same samples/ tree. Filenames are
+      # per-source so they cannot collide.
+      - name: Collect every source's harvest
+        uses: actions/download-artifact@v4
+        with:
+          pattern: harvest-*
+          merge-multiple: true
+          path: .
+        continue-on-error: true
+
+      - name: Show what arrived
+        run: |
+          ls -la samples/scraped/ samples/listings/ 2>/dev/null || true
+          node .github/scripts/summarise-harvest.js || true
+
+      - name: Ingest and recompute
+        run: |
+          set -uo pipefail
+          node jobs/cron.js --only=fx,ingest,ingest:listings,compute 2>&1 | tee /tmp/build.log
+          code=${PIPESTATUS[0]}
+          # Here a failure IS fatal: ingest and compute are required stages, and publishing a
+          # half-built catalogue is worse than publishing nothing.
+          if [ "$code" -ge 2 ]; then exit 1; fi
+
+      - name: Export the serving snapshot
+        run: |
+          set -euo pipefail
+          node db/export-serving.js
+          ls -la data/serving.sqlite
+          node -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('data/serving.sqlite',{readOnly:true});const c=d.prepare('SELECT COUNT(*) n FROM car').get().n;if(!c)throw new Error('snapshot has 0 cars - refusing to publish');console.log('snapshot ok:',c,'cars')"
+
+      # Fixed tag on purpose: the asset URL never changes, so SNAPSHOT_URL is set once in Render
+      # and never touched again. --clobber replaces the file in place.
+      - name: Publish the snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release view data-latest >/dev/null 2>&1 || \
+            gh release create data-latest --title "Serving snapshot (rolling)" \
+              --notes "Read-only snapshot served by the API. Replaced in place by the daily workflow; not a version history."
+          gh release upload data-latest data/serving.sqlite --clobber
+
+      - name: Save state for tomorrow
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [ -f data/driveindex.sqlite ] || { echo "no database to save"; exit 0; }
+          gzip -c data/driveindex.sqlite > /tmp/driveindex.sqlite.gz
+          # Resume markers: small, and the only reason crawlers do not re-walk from the start.
+          # data/cron.lock is excluded on purpose — a PID from this runner is meaningless tomorrow.
+          tar -czf /tmp/crawler-state.tar.gz $(find samples -name '*.state.json') data/fx-rates.json
+          ASSETS="/tmp/driveindex.sqlite.gz /tmp/crawler-state.tar.gz"
+          # Only the two harvest files that get read back are stored. The rest were deltas and
+          # are already folded into the database.
+          if [ -f samples/scraped/bat-partitioned.json ]; then
+            gzip -c samples/scraped/bat-partitioned.json > /tmp/bat-partitioned.json.gz
+            ASSETS="$ASSETS /tmp/bat-partitioned.json.gz"
+          fi
+          if [ -f samples/scraped/cars-and-bids.json ]; then
+            gzip -c samples/scraped/cars-and-bids.json > /tmp/cars-and-bids.json.gz
+            ASSETS="$ASSETS /tmp/cars-and-bids.json.gz"
+          fi
+          gh release view state >/dev/null 2>&1 || \
+            gh release create state --title "Pipeline state (internal)" \
+              --notes "Working database, crawler resume markers, and the two harvest files crawlers read back. Consumed by .github/workflows/daily.yml - not a download for humans."
+          gh release upload state $ASSETS --clobber
+          ls -la /tmp/*.gz
+
+      # Render's free tier does not rebuild on its own, so it is told to. Without this the API
+      # keeps serving yesterday's snapshot until something else triggers a build.
+      - name: Redeploy the API
+        if: success()
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -z "${HOOK:-}" ]; then
+            echo "::warning::RENDER_DEPLOY_HOOK is not set - snapshot published, but the API will keep serving the previous one."
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK" > /dev/null
+          echo "deploy triggered"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: /tmp/build.log
+          if-no-files-found: ignore

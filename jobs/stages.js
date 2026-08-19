@@ -10,7 +10,23 @@ const MINUTES = 60 * 1000;
 
 const STAGES = [
   { name: "scrape:bat", cmd: ["crawler/bat-partitioned.crawler.js", "run"], budget: 90 * MINUTES, env: { DELAY_MS: "2500" }, optional: true },
+  // Detail-page enrichment for BaT (mileage/VIN/transmission/color — see that file's header
+  // for why the list API cannot supply them and why title-regex mileage is a measured trap).
+  // Budget is LOTS, not time: at the paced 1.5s+ request interval, 150 lots ≈ 4 minutes, so
+  // nightly runs drain the backlog incrementally without ever hammering the host.
+  { name: "scrape:bat-detail", cmd: ["crawler/bat-detail.crawler.js", "150"], budget: 10 * MINUTES, optional: true },
   { name: "scrape:cab", cmd: ["crawler/cab.crawler.js"], budget: 30 * MINUTES, optional: true },
+  // MECUM IS PERMISSION-GATED. Their robots.txt prose bars automated collection "without prior
+  // written permission from Mecum Auctions"; the operator obtained that written permission on
+  // 2026-08-18. The grant is to a NAMED PARTY, not a general finding about the site.
+  //
+  //   IF THAT PERMISSION LAPSES, DELETE THIS LINE. The standing 49k sales stay in the database;
+  //   only collection stops. Nothing else in the pipeline depends on this stage existing.
+  //
+  // `auto` = discover from their sitemap, then harvest 3 events — the shape meant for a
+  // scheduled run. Passing a fixed event instead would make every run re-confirm the same
+  // finished event and never advance through the 131 that remain.
+  { name: "scrape:mecum", cmd: ["crawler/mecum.event.crawler.js", "auto"], budget: 60 * MINUTES, optional: true },
   { name: "scrape:rms", cmd: ["crawler/rms.crawler.js", "run"], budget: 30 * MINUTES, optional: true },
   { name: "scrape:good", cmd: ["crawler/gooding.crawler.js", "run"], budget: 15 * MINUTES, optional: true },
   { name: "scrape:sms", cmd: ["crawler/sms.crawler.js"], budget: 5 * MINUTES, optional: true },
