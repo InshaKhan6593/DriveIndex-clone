@@ -14,7 +14,7 @@ export default async function DealsPage() {
   return (
     <>
       <SiteHeader />
-      <main className="w-full max-w-6xl mx-auto px-6 py-8 flex flex-col gap-6">
+      <main className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-5 sm:gap-6 sm:px-6 sm:py-8">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Deal Radar</h1>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
@@ -50,41 +50,39 @@ export default async function DealsPage() {
             </CardHeader>
             <CardContent className="pt-0 flex flex-col">
               {deals.map((d) => (
-                <div key={d.listing_id} className="flex items-center gap-4 py-3 border-b last:border-b-0">
-                  <div className="w-20 h-14 rounded bg-muted relative overflow-hidden shrink-0">
+                <div key={d.listing_id} className="flex flex-col gap-3 border-b py-3 last:border-b-0 sm:flex-row sm:items-center sm:gap-4">
+                  <div className="flex min-w-0 items-center gap-3 sm:flex-1">
+                    <div className="relative h-14 w-20 shrink-0 overflow-hidden rounded bg-muted">
                     {d.image_url && <Image src={d.image_url} alt="" fill sizes="80px" className="object-cover" unoptimized />}
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <Link href={`/cars/${d.car_id}`} className="text-sm font-medium hover:underline">
-                      {d.year} {d.make} {d.model}
-                    </Link>
-                    <div className="text-[11px] text-muted-foreground tabular-nums mt-0.5">
-                      {d.mileage != null ? `${d.mileage.toLocaleString()} mi · ` : ""}
-                      {d.sales_count} verified sales
-                      {d.confidence != null && ` · ${Math.round(d.confidence * 100)}% confidence`}
                     </div>
-                    <div className="mt-1">
-                      <Badge variant="outline" className="capitalize font-normal text-[10px]">{d.source}</Badge>
-                    </div>
-                  </div>
-
-                  <div className="text-right shrink-0">
-                    <div className="text-base font-semibold tabular-nums">${d.price.toLocaleString()}</div>
-                    <div className="text-[11px] text-muted-foreground tabular-nums line-through">
-                      ${d.current_value.toLocaleString()}
+                    <div className="min-w-0 flex-1">
+                      <Link href={`/cars/${d.car_id}`} className="text-sm font-medium hover:underline">
+                        {d.year} {d.make} {d.model}
+                      </Link>
+                      <div className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+                        {d.mileage != null ? `${d.mileage.toLocaleString()} mi · ` : ""}
+                        {d.sales_count} verified sales
+                        {d.confidence != null && ` · ${Math.round(d.confidence * 100)}% confidence`}
+                      </div>
+                      <div className="mt-1">
+                        <Badge variant="outline" className="font-normal text-[10px] capitalize">{d.source}</Badge>
+                      </div>
                     </div>
                   </div>
-
-                  <div className="w-20 text-right shrink-0">
+                  <div className="flex items-center justify-between gap-3 sm:shrink-0">
+                    <div className="text-left sm:text-right">
+                      <div className="text-base font-semibold tabular-nums">${d.price.toLocaleString()}</div>
+                      <div className="text-[11px] text-muted-foreground tabular-nums line-through">
+                        ${d.current_value.toLocaleString()}
+                      </div>
+                    </div>
                     <Badge className="tabular-nums">−{(d.discount * 100).toFixed(0)}%</Badge>
+                    {d.url && (
+                      <Button nativeButton={false} variant="outline" size="sm" render={<a href={d.url} target="_blank" rel="noopener noreferrer" />}>
+                        View
+                      </Button>
+                    )}
                   </div>
-
-                  {d.url && (
-                    <Button nativeButton={false} variant="outline" size="sm" render={<a href={d.url} target="_blank" rel="noopener noreferrer" />}>
-                      View
-                    </Button>
-                  )}
                 </div>
               ))}
             </CardContent>

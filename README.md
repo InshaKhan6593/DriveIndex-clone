@@ -189,6 +189,45 @@ not a discount: **198 of 363** candidates are rejected on that basis. Survivors 
 `discount × confidence`, because a 63% discount against a 22%-confidence value is a worse lead
 than 29% against 64%.
 
+### Signal audit (2026-08-19)
+
+The signal implementation is directionally useful, but it is not a complete or exact reproduction
+of DriveIndex's documented method. The ground truth confirms the method description, not the
+server-side constants, so this distinction matters.
+
+**Implemented and checked:**
+
+- `engine/signal.js` fits log-price against years ago, with the sign arranged so a rising market
+  produces a positive annual return.
+- Clean-sale filtering, mileage normalization, a minimum of 3 sales, a 180-day minimum sale span,
+  and an independent +/-200% annual-return plausibility guard are applied before a directional call.
+- The independent `validation/signal-sanity.js` check found the expected direction in 92% of
+  appreciating cars and 92% of depreciating cars. Bottomed cars showed a 92% historical decline,
+  which is expected for a call that means a decline has recently turned.
+- `engine/reconciliation.test.js` passes 40 checks and `engine/verbatim-conformance.test.js`
+  passes 54 checks. Those suites validate supporting engine arithmetic; they do not establish
+  DriveIndex's unknown signal thresholds.
+
+**What the implementation does not yet match:**
+
+- The documented description says three-window regression with seasonal adjustment. The current
+  classifier uses one long-window regression and an optional recent one; `engine/seasonality.js`
+  computes seasonality separately and does not feed it into signal classification.
+- The independent stable check had a median newest/oldest price ratio of 0.996, but only 24% of
+  stable cars were flat within the check's +/-5% band. This supports a flat median, not a strong
+  per-car stable call.
+- `signal.js` passes raw prices to `volatilityOf()` for confidence even though the regression uses
+  mileage-normalized prices. This can penalize confidence for mileage spread; it remains a known
+  defect, not a signal-direction failure.
+- Bootstrap mileage and collectibility are currently derived from all sales before clean-sale and
+  outlier filtering. Time-blind outlier detection can also remove a genuine market re-rating. Both
+  distortions are documented under **Known-wrong, not yet fixed** below.
+- There are no direct unit tests for the classifier's sign, stable-band boundary, recent-window
+  behavior, or 180-day gate. The sanity check is an independent data check, not a parity test.
+
+The honest status is therefore: **good directional evidence for appreciating/depreciating calls;
+partial reconstruction for the full technique; no claim of exact DriveIndex parity.**
+
 ### Calibration against DriveIndex's published output
 
 Their thresholds run server-side and were never in the client bundle, so they can't be read — but

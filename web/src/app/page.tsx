@@ -27,7 +27,7 @@ export default async function ExplorePage({
   return (
     <>
       <SiteHeader />
-      <main className="w-full max-w-7xl mx-auto px-6 py-8">
+      <main className="mx-auto w-full max-w-7xl px-4 py-5 sm:px-6 sm:py-8">
         <FilterBar total={data.total} />
 
         {data.cars.length === 0 ? (
@@ -35,7 +35,7 @@ export default async function ExplorePage({
             No cars match those filters.
           </p>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
             {data.cars.map((car) => (
               <CarCard key={car.id} car={car} />
             ))}

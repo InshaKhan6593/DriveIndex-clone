@@ -105,7 +105,7 @@ export default async function ComparePage({
   return (
     <>
       <SiteHeader />
-      <main className="w-full max-w-6xl mx-auto px-6 py-8 flex flex-col gap-6">
+      <main className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-5 sm:gap-6 sm:px-6 sm:py-8">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Compare</h1>
           <p className="text-sm text-muted-foreground mt-1">

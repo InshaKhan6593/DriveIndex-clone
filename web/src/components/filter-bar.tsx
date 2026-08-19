@@ -32,9 +32,9 @@ export function FilterBar({ total }: { total: number }) {
 
   return (
     <div className="flex flex-col gap-3 border-b pb-5 mb-6">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="grid grid-cols-2 items-center gap-2 sm:flex sm:flex-wrap">
         <Select items={makeItems} value={searchParams.get("make") ?? "all"} onValueChange={(v) => setParam("make", v === "all" ? null : v)}>
-          <SelectTrigger className="w-[150px]"><SelectValue placeholder="All makes" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-[150px]"><SelectValue placeholder="All makes" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All makes</SelectItem>
             {MAKES.map((m) => <SelectItem key={m} value={m}>{m}</SelectItem>)}
@@ -42,7 +42,7 @@ export function FilterBar({ total }: { total: number }) {
         </Select>
 
         <Select items={bodyItems} value={searchParams.get("bodyType") ?? "all"} onValueChange={(v) => setParam("bodyType", v === "all" ? null : v)}>
-          <SelectTrigger className="w-[140px]"><SelectValue placeholder="All bodies" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-[140px]"><SelectValue placeholder="All bodies" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All bodies</SelectItem>
             {BODY_TYPES.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}
@@ -50,7 +50,7 @@ export function FilterBar({ total }: { total: number }) {
         </Select>
 
         <Select items={yearItems} value={searchParams.get("year") ?? "all"} onValueChange={(v) => setParam("year", v === "all" ? null : v)}>
-          <SelectTrigger className="w-[130px]"><SelectValue placeholder="All years" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-[130px]"><SelectValue placeholder="All years" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All years</SelectItem>
             {YEAR_BUCKETS.map((y) => <SelectItem key={y.value} value={y.value}>{y.label}</SelectItem>)}
@@ -58,7 +58,7 @@ export function FilterBar({ total }: { total: number }) {
         </Select>
 
         <Select items={sortItems} value={searchParams.get("sort") ?? "popular"} onValueChange={(v) => setParam("sort", v)}>
-          <SelectTrigger className="w-[150px]"><SelectValue placeholder="Sort" /></SelectTrigger>
+          <SelectTrigger className="w-full sm:w-[150px]"><SelectValue placeholder="Sort" /></SelectTrigger>
           <SelectContent>
             {SORTS.map((s) => <SelectItem key={s.value} value={s.value}>Sort: {s.label}</SelectItem>)}
           </SelectContent>
@@ -67,7 +67,7 @@ export function FilterBar({ total }: { total: number }) {
         <Input
           placeholder="Search make or model…"
           defaultValue={searchParams.get("q") ?? ""}
-          className="w-[200px] ml-auto"
+          className="col-span-2 w-full sm:ml-auto sm:w-[200px]"
           onKeyDown={(e) => {
             if (e.key === "Enter") setParam("q", (e.target as HTMLInputElement).value || null);
           }}
@@ -93,7 +93,7 @@ export function FilterBar({ total }: { total: number }) {
           For sale now
         </Button>
 
-        <span className="ml-auto text-sm text-muted-foreground tabular-nums">
+        <span className="w-full text-sm text-muted-foreground tabular-nums sm:ml-auto sm:w-auto">
           {total.toLocaleString()} models
         </span>
       </div>

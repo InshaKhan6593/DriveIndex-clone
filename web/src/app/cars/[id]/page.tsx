@@ -31,7 +31,7 @@ export default async function CarDetailPage({ params }: { params: Promise<{ id: 
           flex-col) shrink-to-fits its own content instead of stretching to max-w-6xl, so the
           page's width silently varied per car depending on how wide that car's content
           happened to be. Same bug, same fix, as the Explore grid earlier. */}
-      <main className="w-full max-w-6xl mx-auto px-6 py-8">
+       <main className="mx-auto w-full max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
         {/* Header */}
         <div className="flex flex-col sm:flex-row gap-6 mb-6">
           <div className="sm:w-72 aspect-[16/10] shrink-0 rounded-lg overflow-hidden bg-muted relative">
@@ -44,8 +44,8 @@ export default async function CarDetailPage({ params }: { params: Promise<{ id: 
           <div className="flex flex-col gap-3 flex-1">
             <div>
               <Link href="/" className="text-sm text-muted-foreground hover:underline">← Back to Explore</Link>
-              <h1 className="text-2xl font-semibold tracking-tight mt-1">{title}</h1>
-              <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
+             <h1 className="mt-1 break-words text-xl font-semibold tracking-tight sm:text-2xl">{title}</h1>
+             <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
                 {car.bodyType && <span>{car.bodyType}</span>}
                 {car.generation && <span>· {car.generation}</span>}
                 <span>· {soldCount} sale{soldCount === 1 ? "" : "s"}{car.listingsCount > 0 && ` · ${car.listingsCount} listed`}</span>
@@ -55,7 +55,7 @@ export default async function CarDetailPage({ params }: { params: Promise<{ id: 
               <SignalBadge signal={car.signal} />
               {car.buyHoldSell?.label && <Badge variant="secondary">{car.buyHoldSell.label}</Badge>}
             </div>
-            <div className="mt-auto flex items-end justify-between border-t pt-3">
+             <div className="mt-auto flex flex-col items-start gap-3 border-t pt-3 sm:flex-row sm:items-end sm:justify-between">
               <div>
                 <div className="text-xs uppercase tracking-wide text-muted-foreground">Current est. value</div>
                 <div className="text-3xl font-semibold tabular-nums">
@@ -76,7 +76,7 @@ export default async function CarDetailPage({ params }: { params: Promise<{ id: 
                 )}
               </div>
               {car.confidence != null && (
-                <div className="text-right">
+               <div className="text-left sm:text-right">
                   <div className="text-xs uppercase tracking-wide text-muted-foreground">Confidence</div>
                   <div className="text-lg font-medium tabular-nums">{Math.round(car.confidence * 100)}%</div>
                 </div>
@@ -97,16 +97,23 @@ export default async function CarDetailPage({ params }: { params: Promise<{ id: 
           <p className="text-sm text-muted-foreground border rounded-lg px-4 py-3 bg-muted/30 mb-6">{car.buyHoldSell.copy}</p>
         )}
 
-        {car.relatedYears.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-6">
-            <span className="text-xs uppercase tracking-wide text-muted-foreground self-center mr-1">Related</span>
-            {car.relatedYears.map((r) => (
-              <Link key={r.id} href={`/cars/${r.id}`}>
-                <Badge variant="outline" className="cursor-pointer hover:bg-accent">{r.year}</Badge>
-              </Link>
-            ))}
-          </div>
-        )}
+         {car.relatedYears.length > 0 && (
+           <details className="group mb-6" open={car.relatedYears.length <= 8}>
+             <summary className="flex cursor-pointer list-none items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground [&::-webkit-details-marker]:hidden">
+               <span>Related years</span>
+               <span className="rounded-full border px-1.5 py-0.5 normal-case tracking-normal">{car.relatedYears.length}</span>
+               <span className="ml-auto text-[11px] normal-case tracking-normal group-open:hidden">Show</span>
+               <span className="ml-auto hidden text-[11px] normal-case tracking-normal group-open:inline">Hide</span>
+             </summary>
+             <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto rounded-lg border bg-muted/20 p-2">
+               {car.relatedYears.map((r) => (
+                 <Link key={r.id} href={`/cars/${r.id}`}>
+                   <Badge variant="outline" className="cursor-pointer hover:bg-accent">{r.year}</Badge>
+                 </Link>
+               ))}
+             </div>
+           </details>
+         )}
 
         {/* Two columns from here down: left = the long-form content you scroll through
             (chart, sales/listings, seasonality, repricer), right = the at-a-glance stats,
@@ -133,7 +140,7 @@ export default async function CarDetailPage({ params }: { params: Promise<{ id: 
                   <CardTitle>Best Time to Buy &amp; Sell</CardTitle>
                   <CardDescription>Seasonal pattern from this car&apos;s own sales history.</CardDescription>
                 </CardHeader>
-                <CardContent className="flex gap-8">
+                 <CardContent className="flex flex-col gap-4 sm:flex-row sm:gap-8">
                   {!!car.bestMonths?.length && (
                     <div>
                       <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Cheapest to buy</div>
