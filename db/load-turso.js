@@ -76,8 +76,11 @@ const remote = new Database(URL, { authToken: TOKEN });
 // afterwards. Statements are split on semicolons at line ends to keep CHECK constraints intact.
 const schema = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
 for (const stmt of schema.split(/;\s*\n/)) {
-  const s = stmt.trim();
-  if (!s || s.startsWith("--")) continue;
+  // The first schema statement is preceded by documentation comments. Strip full-line SQL
+  // comments before checking whether the chunk is empty, otherwise CREATE TABLE car is skipped
+  // and the following index fails with "no such table: main.car" on a fresh Turso database.
+  const s = stmt.split(/\r?\n/).filter((line) => !line.trim().startsWith("--")).join("\n").trim();
+  if (!s) continue;
   try {
     remote.exec(s + ";");
   } catch (err) {
@@ -86,6 +89,20 @@ for (const stmt of schema.split(/;\s*\n/)) {
       console.error(`schema statement failed: ${s.slice(0, 80)}...`);
       throw err;
     }
+  }
+}
+
+// A previous local snapshot is only a valid diff base when the remote already contains that
+// snapshot. A newly-created or partially initialized Turso database must receive the full
+// serving snapshot, even though data-latest exists from before Turso was configured.
+let usePreviousSnapshot = Boolean(hasPrev);
+if (usePreviousSnapshot) {
+  const remoteCounts = TABLES.map((table) => remote.prepare(`SELECT COUNT(*) n FROM "${table}"`).get().n);
+  const previousCounts = TABLES.map((table) => src.prepare(`SELECT COUNT(*) n FROM prev."${table}"`).get().n);
+  if (remoteCounts.some((count, i) => count !== previousCounts[i])) {
+    console.log(`remote counts ${remoteCounts.join(",")} do not match previous snapshot ${previousCounts.join(",")} - resetting remote tables and pushing a full snapshot`);
+    for (const table of [...TABLES].reverse()) remote.exec(`DELETE FROM "${table}"`);
+    usePreviousSnapshot = false;
   }
 }
 
@@ -128,7 +145,7 @@ for (const table of TABLES) {
 
   // Whole-row EXCEPT: catches inserts AND in-place edits to any column, without having to know
   // which columns a given release happens to change.
-  const changedSql = hasPrev
+  const changedSql = usePreviousSnapshot
     ? `SELECT ${colList} FROM main."${table}" EXCEPT SELECT ${colList} FROM prev."${table}"`
     : `SELECT ${colList} FROM main."${table}"`;
 
@@ -145,12 +162,12 @@ for (const table of TABLES) {
   // API answers with rows the pipeline has already retired.
   const pk = primaryKeyOf(table);
   let deletedIds = [];
-  if (hasPrev && pk) {
+  if (usePreviousSnapshot && pk) {
     deletedIds = src
       .prepare(`SELECT "${pk}" AS k FROM prev."${table}" EXCEPT SELECT "${pk}" AS k FROM main."${table}"`)
       .all()
       .map((r) => r.k);
-  } else if (hasPrev && !pk) {
+  } else if (usePreviousSnapshot && !pk) {
     // Loud rather than silent: a table whose retired rows are never removed would drift further
     // from the snapshot every single day, and nothing downstream would report it.
     console.log(`${table.padEnd(22)} no single-column primary key — deletions NOT reconciled`);
