@@ -39,14 +39,12 @@ for (const f of [OUT, `${OUT}-journal`]) {
     fs.rmSync(f, { force: true });
   } catch (err) {
     if (err.code !== "EBUSY" && err.code !== "EPERM") throw err;
-    console.error(`
-cannot replace ${f} — a process still has it open.`);
+    console.error(`\ncannot replace ${f} — a process still has it open.`);
     console.error("Something is serving this snapshot. Stop it and re-run:");
     console.error("  PowerShell:  Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" |");
     console.error("                 Where-Object { $_.CommandLine -like '*api/server.js*' } |");
     console.error("                 Select-Object ProcessId, CommandLine");
-    console.error("               then: Stop-Process -Id <pid> -Force
-");
+    console.error("               then: Stop-Process -Id <pid> -Force\n");
     process.exit(1);
   }
 }

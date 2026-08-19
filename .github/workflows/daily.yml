@@ -93,6 +93,13 @@ jobs:
             npm ci --omit=dev
           fi
 
+      # Ten seconds here against an hour of wasted runner time. A CLI entry point that does not
+      # parse is only discovered when its stage starts, which for db/export-serving.js meant after
+      # a 73MB restore, a full ingest and a 71k-car recompute. No test loads those files, so the
+      # suite cannot catch it; this can.
+      - name: Check every file parses
+        run: node validation/syntax-check.js
+
       - name: Restore resume markers
         env:
           GH_TOKEN: ${{ github.token }}
@@ -182,6 +189,13 @@ jobs:
 
       - name: Install dependencies
         run: npm ci --omit=dev
+
+      # Ten seconds here against an hour of wasted runner time. A CLI entry point that does not
+      # parse is only discovered when its stage starts, which for db/export-serving.js meant after
+      # a 73MB restore, a full ingest and a 71k-car recompute. No test loads those files, so the
+      # suite cannot catch it; this can.
+      - name: Check every file parses
+        run: node validation/syntax-check.js
 
       - name: Restore working database
         env:
