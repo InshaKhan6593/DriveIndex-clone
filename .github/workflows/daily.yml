@@ -246,8 +246,45 @@ jobs:
           ls -la data/serving.sqlite
           node -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('data/serving.sqlite',{readOnly:true});const c=d.prepare('SELECT COUNT(*) n FROM car').get().n;if(!c)throw new Error('snapshot has 0 cars - refusing to publish');console.log('snapshot ok:',c,'cars')"
 
-      # Fixed tag on purpose: the asset URL never changes, so SNAPSHOT_URL is set once in Render
-      # and never touched again. --clobber replaces the file in place.
+      # The PREVIOUS snapshot is what the Turso load diffs against, and it is already published
+      # as data-latest — so it costs nothing extra to store. It must be fetched BEFORE the new one
+      # replaces it, which is why this sits above the publish step rather than below it.
+      - name: Fetch the previously published snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release download data-latest --pattern 'serving.sqlite' --dir /tmp/prev 2>/dev/null; then
+            mv /tmp/prev/serving.sqlite data/serving-prev.sqlite
+            ls -la data/serving-prev.sqlite
+          else
+            echo "no previous snapshot published yet - the Turso load will push everything once"
+          fi
+
+      # Turso holds the data the API reads. Only the DIFF is pushed: the free tier allows 10M row
+      # writes a month and the snapshot is 361k rows, so a full daily reload would be 10.8M -
+      # over the cap on day one. See db/load-turso.js for the arithmetic.
+      # The guard is in the script, not in `if:`. A step's own `env:` block is NOT visible to its
+      # `if:` expression — that is evaluated first — so `if: env.TURSO_DATABASE_URL != ''` would
+      # have been false every time and this step would have silently never run.
+      - name: Load the data into Turso
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TURSO_DATABASE_URL:-}" ]; then
+            echo "::warning::TURSO_DATABASE_URL is not set - skipping the load. The snapshot is"
+            echo "::warning::published, but the live API will keep serving whatever it has."
+            exit 0
+          fi
+          PREV=""
+          [ -f data/serving-prev.sqlite ] && PREV="data/serving-prev.sqlite"
+          node db/load-turso.js data/serving.sqlite $PREV
+
+      # Fixed tag on purpose: the asset URL never changes. The snapshot is still published even
+      # though the API reads Turso - it is the rollback point, and it is what the NEXT run diffs
+      # against. --clobber replaces the file in place.
       - name: Publish the snapshot
         env:
           GH_TOKEN: ${{ github.token }}
@@ -286,19 +323,9 @@ jobs:
           gh release upload state $ASSETS --clobber
           ls -la /tmp/*.gz
 
-      # Render's free tier does not rebuild on its own, so it is told to. Without this the API
-      # keeps serving yesterday's snapshot until something else triggers a build.
-      - name: Redeploy the API
-        if: success()
-        env:
-          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
-        run: |
-          if [ -z "${HOOK:-}" ]; then
-            echo "::warning::RENDER_DEPLOY_HOOK is not set - snapshot published, but the API will keep serving the previous one."
-            exit 0
-          fi
-          curl -fsS -X POST "$HOOK" > /dev/null
-          echo "deploy triggered"
+      # NO REDEPLOY STEP, deliberately. Under the file-snapshot model the API had to be rebuilt to
+      # pick up new data. Reading from Turso, it does not: the rows change and the very next
+      # request sees them. Nothing to trigger, nothing to go stale, one less secret to hold.
 
       - name: Upload logs
         if: always()

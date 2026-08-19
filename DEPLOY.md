@@ -9,10 +9,10 @@ workflow, not by the API, and not on your machine.
                      bat(+bat-detail) · cab · mecum · rms · good · sms · broadarrow · dupont · bonhams
       job `build`    fx -> ingest -> ingest:listings -> compute
                        -> data/serving.sqlite
-                       -> GitHub Release asset (fixed tag `data-latest`)
-                       -> POST Render deploy hook
-    Render           fetches the snapshot at build, serves the read API
-    Vercel           serves the Next.js frontend
+                       -> push the DIFF into Turso   (what the API reads)
+                       -> GitHub Release asset, tag `data-latest`  (rollback + tomorrow's diff base)
+    Vercel           serves the API (serverless) and the Next.js frontend
+    Turso            holds the data the API queries
 
 **Every scraper runs.** The full pipeline budgets 505 minutes and GitHub kills a job at 360, so
 one long job could never hold it — but the scrapers are independent (each writes its own harvest
@@ -23,30 +23,48 @@ whole thing finishes in about as long as the slowest single source.
 ## What each piece costs
 
 
-| piece | where | cost | the catch |
-|---|---|---|---|
-| Frontend | Vercel Hobby | free | none for this workload |
-| Read API | Render free web service | free | **spins down after 15 min idle**, ~1 min cold start; 750 instance-hours/month |
-| Daily pipeline | GitHub Actions | **free, unlimited** | only because this repo is **public** |
-| Snapshot + state storage | GitHub Release assets | free | 2 GB per file |
+| piece | where | cost | card needed? | the catch |
+|---|---|---|---|---|
+| Frontend | Vercel Hobby | free | **no** | none for this workload |
+| Read API | Vercel serverless | free | **no** | cold start of a second or two |
+| Data | Turso free tier | free | **no** | 5 GB storage, **10M row writes/month** — see below |
+| Daily pipeline | GitHub Actions | free, unlimited | **no** | only because this repo is **public** |
+| Snapshot + state storage | GitHub Release assets | free | **no** | 2 GB per file |
 
-Two limits are load-bearing, and both are documented rather than assumed:
+Nothing here asks for a payment method. That is the reason for the shape.
 
-* **Render's free tier has no cron jobs and no persistent disks.** That is why the pipeline
-  cannot live there — it could not run on a schedule, and could not keep the 294 MB working
-  database between runs if it could. https://render.com/docs/free
+Three limits are load-bearing, and all three are measured rather than assumed:
+
+* **Turso allows 10 million row writes per month.** The snapshot is 361,234 rows, so reloading
+  it daily would be 10.8M — over the cap on day one, and it grows every day. This is why
+  `db/load-turso.js` pushes only the DIFF against the previously published snapshot, which is
+  about 70k rows a day (~2.1M/month) because nightly-compute rewrites every valuation while
+  sales are append-mostly.
 * **GitHub Actions is free and unlimited for public repositories.** If this repo is ever made
-  private it falls back to 2,000 minutes/month, which a daily multi-hour run blows through in
-  about a week. Make the schedule weekly or move the cron to a local machine if that happens.
+  private it falls back to 2,000 minutes/month, which a daily multi-hour run exhausts in about a
+  week. Make the schedule weekly, or move the cron to a local machine, if that happens.
+* **Render was the original plan and was dropped.** Its free tier has no cron jobs and no
+  persistent disks (https://render.com/docs/free), and in practice it asked for a card for
+  identity verification. Nothing here needs it. `render.yaml` is kept because that path still
+  works if you ever want it, but it is not part of the deployment.
 
-## Why no database service
+## Why Turso, when the whole design avoided a database
 
-The data is read-only, so it travels with the API instead of living in a hosted database. That
-removes a moving part — and on Windows it removes the Turso CLI, which requires WSL, i.e. a
-reboot and a Linux install to upload one file.
+Because a serverless function cannot carry a 178 MB file, and going serverless is what removes
+the need for a card. The read-only design is otherwise unchanged: production still never scrapes,
+still never computes, and still only reads.
 
-The snapshot cannot be committed: 167 MB against GitHub's 100 MB file limit. Release assets
-allow 2 GB, so that is where it goes.
+`db/client.js` already spoke hosted libSQL — that path was built and tested and simply unused.
+The stated blocker was that loading data into it needed the Turso CLI, which on Windows means
+WSL. **That blocker is gone**: the daily workflow runs on Ubuntu, and `db/load-turso.js` writes
+through the `libsql` package directly, so no CLI is involved at all.
+
+One thing this BUYS, beyond avoiding the card: **there is no redeploy step any more.** Under the
+file-snapshot model the API had to be rebuilt to see new data. Reading from Turso, the rows
+change and the very next request sees them.
+
+The snapshot is still published to `data-latest` on every run. It is the rollback point, and it
+is what the next day's run diffs against — so it costs nothing extra to keep.
 
 ---
 
@@ -92,51 +110,86 @@ harvest is 190 MB raw and 16 MB compressed.
 
 ⚠️ The tag must be exactly `state`. The workflow looks it up by name.
 
-## 2. API — Render
+## 2. Turso — the database the API reads
 
-Dashboard → New → Blueprint → this repo. [render.yaml](render.yaml) supplies build and start
-commands. Set one variable:
+Sign up at **https://turso.tech** (GitHub login, no card). Then:
 
-    SNAPSHOT_URL   https://github.com/InshaKhan6593/DriveIndex-clone/releases/download/data-latest/serving.sqlite
+1. **Create a database** — any name, e.g. `driveindex`. Pick the region closest to you.
+2. On its page, copy the **Database URL**. It looks like `libsql://driveindex-<you>.turso.io`.
+3. **Create a token** for it (Turso calls this an auth token / database token). Copy it — it is
+   shown once.
 
-That URL is **fixed forever** — the workflow replaces the asset in place under the same
-`data-latest` tag, so you never edit this value again. (The old flow used a dated tag per
-publish and needed a manual dashboard edit every time; that is what this replaces.)
+Nothing to load by hand: the workflow pushes the data in step 5.
 
-The build downloads the snapshot with `curl -fL`, so a bad URL fails the BUILD loudly instead of
-deploying an API with no database, and then opens it to count rows before the service starts.
+## 3. Add both to GitHub Actions
 
-⚠️ A **private** repo's release assets need a token to download, which the build does not have.
-This repo is public, so this works. If you ever make it private, this breaks.
+GitHub → **Settings → Secrets and variables → Actions → New repository secret**, twice:
 
-Then: Render → your service → **Settings → Deploy Hook** → copy the URL.
+    TURSO_DATABASE_URL    libsql://....turso.io
+    TURSO_AUTH_TOKEN      the token from step 2
 
-## 3. Frontend — Vercel
+Without these the run still completes and publishes the snapshot, but warns and skips the load —
+so the API would serve whatever it already had. That is deliberate: a missing secret should not
+throw away a four-hour scrape.
 
-Import the repo, **root directory `web`**, and set:
+## 4. API — Vercel (a second project, root = repo root)
 
-    API_URL       the https://... URL Render gave you
-    ACCESS_CODE   the shared login code
+**https://vercel.com/new** → import the repo.
 
-## 4. Give Actions the deploy hook
+- **Root Directory**: leave as the repository root (do NOT set it to `web` — that is the other
+  project, in step 6)
+- Environment variables:
 
-GitHub → repo **Settings → Secrets and variables → Actions → New repository secret**:
+```
+TURSO_DATABASE_URL   same value as the secret above
+TURSO_AUTH_TOKEN     same value as the secret above
+```
 
-    Name:   RENDER_DEPLOY_HOOK
-    Value:  the Render deploy hook URL from step 2
+[vercel.json](vercel.json) routes every path to `api/index.js`, which hands the request to the
+Express app in `api/server.js` unchanged — Vercel invokes a module export as `(req, res)`, and
+that is exactly what an Express app is. `db/client.js` sees `TURSO_DATABASE_URL` and connects to
+the hosted database instead of a local file, so nothing in the API needed rewriting.
 
-Without it the workflow still publishes the snapshot, but warns and skips the redeploy — the API
-would keep serving the previous day's data until something else triggers a build.
+✅ **Check:** `https://<api-project>.vercel.app/api/health` → `{"ok":true,"cars":...,"hosted":true}`
 
-## 5. Test it before trusting the schedule
+Note `hosted: true` — that is how you know it is reading Turso and not a file.
 
-GitHub → **Actions → daily → Run workflow**, and set **sources** to `none`. That finishes in
-minutes and exercises restore → ingest → compute → export → publish → redeploy without touching a
-single auction site — so if something is wrong with Render, the secret, or the state release, you
-find out immediately rather than after a four-hour scrape.
+⚠️ Until step 5 runs, the database is empty and this returns `cars: 0`. That is correct at this
+point, not a failure.
 
-Once that is green, run it again with **sources** = `bonhams` (fast, plain fetch, no browser) to
-prove a real scrape end-to-end. Then let the schedule take over.
+## 5. Load the data
+
+GitHub → **Actions → daily → Run workflow** → **sources = `none`**.
+
+This restores the corpus, recomputes, exports, and pushes everything into Turso. The first load
+is the big one — all 361,234 rows, about 3.6% of the monthly write budget in one go. Every run
+after it pushes only the diff.
+
+✅ **Check:** the log shows a per-table breakdown ending in `remote matches the snapshot`, and
+`/api/health` now reports the real car count.
+
+## 6. Frontend — Vercel (the second project)
+
+**https://vercel.com/new** → import the **same repo again**.
+
+- **Root Directory**: set it to **`web`** ← the one thing people miss
+- Environment variables:
+
+```
+API_URL       https://<api-project>.vercel.app
+ACCESS_CODE   your shared login code
+```
+
+✅ **Check:** the URL loads `/login`, your code gets you in, the catalogue renders, and a car
+detail page, `/trending` and `/deals` all load.
+
+## 7. Prove a real scrape end to end
+
+Run the workflow again with **sources = `bonhams`** — fast, plain fetch, no browser.
+
+✅ **Check:** the `scrape (bonhams)` job is green, the harvest summary shows a bonhams record
+count, the Turso load reports a small diff rather than 361k rows, and the site shows the new
+data **without any redeploy** — that last part is the whole point of reading from Turso.
 
 ---
 
