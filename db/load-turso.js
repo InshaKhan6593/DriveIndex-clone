@@ -192,14 +192,9 @@ for (const table of TABLES) {
   const BATCH = 1000;
   for (let i = 0; i < changed.length; i += BATCH) {
     const slice = changed.slice(i, i + BATCH);
-    remote.exec("BEGIN");
-    try {
+    remote.transaction(() => {
       for (const row of slice) insert.run(...cols.map((c) => row[c]));
-      remote.exec("COMMIT");
-    } catch (err) {
-      remote.exec("ROLLBACK");
-      throw err;
-    }
+    })();
     process.stdout.write(`\r${table.padEnd(22)} ${Math.min(i + BATCH, changed.length)}/${changed.length}   `);
   }
 
@@ -216,14 +211,9 @@ for (const table of TABLES) {
 // on the first day a car was ever retired, and aborted the whole load.
 for (const job of pendingDeletes.reverse()) {
   const del = remote.prepare(`DELETE FROM "${job.table}" WHERE "${job.pk}" = ?`);
-  remote.exec("BEGIN");
-  try {
+  remote.transaction(() => {
     for (const id of job.ids) del.run(id);
-    remote.exec("COMMIT");
-  } catch (err) {
-    remote.exec("ROLLBACK");
-    throw err;
-  }
+  })();
   console.log(`deleted ${String(job.ids.length).padStart(7)} from ${job.table}`);
 }
 
