@@ -16,9 +16,9 @@ export function SiteHeader() {
           Exotic <span className="text-[#c99e5b]">Vest</span>
         </Link>
         <div className="ml-auto flex min-w-0 items-center gap-3">
-          <nav className="flex min-w-0 items-center gap-4 overflow-x-auto whitespace-nowrap text-xs sm:gap-5 sm:text-sm">
+          <nav className="no-scrollbar flex min-w-0 items-center gap-4 overflow-x-auto whitespace-nowrap text-xs sm:gap-5 sm:text-sm">
             {NAV.map((n) => (
-              <Link key={n.href} href={n.href} className="text-muted-foreground transition-colors hover:text-foreground">
+              <Link key={n.href} href={n.href} className="text-muted-foreground no-underline transition-colors hover:text-foreground hover:no-underline">
                 {n.label}
               </Link>
             ))}
