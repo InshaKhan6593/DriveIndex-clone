@@ -41,23 +41,18 @@ function parsePrice(text) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-// AUTOMOBILIA, measured on the 2026-08-18 sitemap-scale harvest: big car events (Kissimmee
-// et al) carry inline memorabilia lots — 3,273 of ~19k records had titles with no model year,
-// and sampling showed signs, tether cars, tool kits, badges, models and neon gas-station
-// memorabilia ("1950S Ford A 1 Used Cars Double Sided Dealership Sign" — a make word on a
-// SIGN, so make-detection cannot catch it). Left in, all 3,273 flood the review queue as
-// UNPARSEABLE, one porcelain sign at a time — the exact failure mode that drove BaT's
-// taxonomy-level category exclusion. The resolver's component head-noun rule (wheels/seats/
-// manifold/gauges) stays authoritative for anything that slips past; this is the cheap
-// bounded front gate, keyed on OBJECT phrases only.
-//
-// ⚠️ Every pattern here was checked against REAL CAR NAMES it would destroy:
-//   bare "neon"   -> Plymouth Neon          bare "model"  -> Ford Model T / Model A
-//   bare "manual" -> "5-Speed Manual"       sign (no \b)  -> AMG "Designo"
-//   "print\b"     -> "Sprint" trims         bare "kit"    -> kit-car replicas (review's job)
-// Hence "sign\b", "model\s+(kit|by)", "owner's manual", no bare neon/kit.
-const AUTOMOBILIA_RE =
-  /\b(?:signs?\b|billboard|poster|banner\b|pedestal|display\b|diorama|scale\s+(?:tether\s+)?car|tether\s+car|slot\s+car|pedal\s+car|ride-on|models?\s+(?:kit|by)\b|scale\s+model|toys?\b|badges?\b|pins?\b|buttons?\b|medal|trophy|helmet|jackets?\b|shirt|hats?\b|caps?\b|globe\b|gas\s+pump|lubester|oil\s+bottle|bottles?\b|crate\b|(?:owner'?s?|shop|service)\s+manual|brochure|booklet|literature|\bprint\b|lithograph|painting|artwork|photograph|toolbox|tool\s+kit|tools?\b|jacks?\b|vise\b|anvil|grease\s+gun|spark\s+plug|engine\s+stand|gas\s+can|oil\s+can|grenade|granade|whiskey|decanter|hydroplane\s+model|mailbox|phones?\b|radios?\b|clocks?\b|thermometer|syrup|soda\s+machine|cooler\b|cabinet|chests?\b|trunk\s+lid|keychain|license\s+plates?\b|assortment|collection\s+of|lot\s+of|autographed|signed\s+shadowbox|shadowbox|stadium\s+seats?|kiddie\s+ride|coin\s+operated|rocking\s+boat)\b/i;
+// AUTOMOBILIA — the regex lives in mecum-automobilia-patterns.js, shared with the
+// Barrett-Jackson adapter. It was measured on the 2026-08-18 sitemap-scale harvest: big car
+// events (Kissimmee et al) carry inline memorabilia lots — 3,273 of ~19k records had titles
+// with no model year, and sampling showed signs, tether cars, tool kits, badges, models and
+// neon gas-station memorabilia ("1950S Ford A 1 Used Cars Double Sided Dealership Sign" — a
+// make word on a SIGN, so make-detection cannot catch it). Left in, all 3,273 flood the
+// review queue as UNPARSEABLE, one porcelain sign at a time — the exact failure mode that
+// drove BaT's taxonomy-level category exclusion. The resolver's component head-noun rule
+// (wheels/seats/manifold/gauges) stays authoritative for anything that slips past; this is
+// the cheap bounded front gate, keyed on OBJECT phrases only. See that file for the
+// real-car-name safety notes and mecum-automobilia.test.js for the fixture list.
+const { AUTOMOBILIA_RE } = require("./mecum-automobilia-patterns");
 
 function isAutomobilia(title) {
   return AUTOMOBILIA_RE.test(String(title || ""));

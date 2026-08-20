@@ -37,7 +37,7 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"div">) 
         setLoading(false);
         return;
       }
-      router.push(searchParams.get("from") || "/");
+      router.push(searchParams.get("from") || "/cars");
       router.refresh();
     } catch {
       setError("Something went wrong. Try again.");
@@ -49,8 +49,8 @@ export function LoginForm({ className, ...props }: React.ComponentProps<"div">) 
     <div className={cn("flex flex-col gap-6", className)} {...props}>
       <Card>
         <CardHeader>
-          <CardTitle className="text-xl font-semibold tracking-tight">Access code</CardTitle>
-          <CardDescription>Enter your DriveIndex access code to continue</CardDescription>
+          <CardTitle className="text-xl font-semibold tracking-tight">Exotic Vest access</CardTitle>
+          <CardDescription>Enter your Exotic Vest access code to continue</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit}>

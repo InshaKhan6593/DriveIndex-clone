@@ -126,7 +126,7 @@ app.get("/api/cars", (req, res) => {
 
   const base = `
     SELECT c.*, v.current_value, v.signal, v.confidence, v.segment, v.sales_count,
-      (SELECT COUNT(*) FROM listing l WHERE l.car_id = c.id AND l.is_active = 1) AS listings_count,
+      COALESCE(v.listings_count, 0) AS listings_count,
       (SELECT s2.image_url FROM sale s2 WHERE s2.car_id = c.id AND s2.image_url IS NOT NULL
          ORDER BY s2.sold_at DESC LIMIT 1) AS fallback_image
     FROM car c LEFT JOIN car_valuation v ON v.car_id = c.id`;

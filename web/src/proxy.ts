@@ -3,10 +3,16 @@ import type { NextRequest } from "next/server";
 import { COOKIE_NAME, isValidSessionToken } from "@/lib/session";
 
 const PUBLIC_PATHS = ["/login", "/api/login"];
+const PUBLIC_ASSET = /\.(?:avif|gif|ico|jpe?g|png|svg|webp|woff2?|ttf)$/i;
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p)) || pathname.startsWith("/_next")) {
+  if (
+    pathname === "/" ||
+    PUBLIC_PATHS.some((p) => pathname.startsWith(p)) ||
+    pathname.startsWith("/_next") ||
+    PUBLIC_ASSET.test(pathname)
+  ) {
     return NextResponse.next();
   }
 

@@ -37,8 +37,8 @@ export function SignalBadge({ signal }: { signal: string | null }) {
 
 export function CarCard({ car }: { car: CarSummary }) {
   return (
-    <Link href={`/cars/${car.id}`} className="block group">
-      <div className="border rounded-lg overflow-hidden bg-card transition-shadow hover:shadow-md">
+    <Link href={`/cars/${car.id}`} className="group block text-foreground hover:text-foreground">
+      <div className="overflow-hidden rounded-lg border bg-card text-card-foreground transition-shadow hover:text-card-foreground hover:shadow-md">
         <div className="aspect-[16/10] bg-muted relative overflow-hidden">
           {car.imageUrl ? (
             <Image
@@ -59,7 +59,7 @@ export function CarCard({ car }: { car: CarSummary }) {
         <div className="p-2.5 flex flex-col gap-1">
           {/* min-h reserves 2 lines regardless of actual length, so a short title ("911 GT3")
               and a long one ("Aventador SVJ Roadster") produce the same card height. */}
-          <div className="text-sm font-medium leading-snug line-clamp-2 min-h-[2.5rem]">
+          <div className="min-h-[2.5rem] line-clamp-2 text-sm font-medium leading-snug text-card-foreground">
             {car.year} {car.make} {car.model}
           </div>
           <div className="text-[11px] text-muted-foreground tabular-nums">
@@ -78,7 +78,7 @@ export function CarCard({ car }: { car: CarSummary }) {
 
           <div className="flex items-end justify-between">
             <span className="text-[9px] uppercase tracking-wide text-muted-foreground">Est. value</span>
-            <span className="text-sm font-semibold tabular-nums">
+            <span className="text-sm font-semibold tabular-nums text-card-foreground">
               {car.currentValue ? `$${car.currentValue.toLocaleString()}` : "—"}
             </span>
           </div>
