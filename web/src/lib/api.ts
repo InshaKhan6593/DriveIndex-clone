@@ -60,6 +60,14 @@ export type Listing = {
   currency: string | null;
   source: string | null;
   url: string | null;
+  listingType: "auction" | "classified";
+  listingStatus: "live" | "upcoming" | "sold" | "sold_after" | "bid_to" | "reserve_not_met" | "withdrawn" | "ended" | "unknown";
+  priceType: "current_bid" | "asking" | "estimate" | "high_bid" | "sold";
+  currentBid: number | null;
+  estimateLow: number | null;
+  estimateHigh: number | null;
+  endsAt: string | null;
+  closedAt: string | null;
 };
 
 export type CarDetail = {

@@ -191,7 +191,18 @@ CREATE TABLE IF NOT EXISTS listing (
   price_history TEXT, -- JSON [{date,price,change}]
   first_seen_at TEXT,
   last_seen_at  TEXT,
-  is_active     INTEGER
+  is_active     INTEGER,
+  -- Lifecycle fields are source-neutral. They let an auction move from live -> sold/bid_to/
+  -- withdrawn without treating a high bid or an asking price as a completed sale.
+  listing_type  TEXT, -- 'auction' | 'classified'
+  listing_status TEXT, -- live | upcoming | sold | sold_after | bid_to | reserve_not_met | withdrawn | ended | unknown
+  price_type    TEXT, -- current_bid | asking | estimate | high_bid | sold
+  current_bid   INTEGER,
+  estimate_low  INTEGER,
+  estimate_high INTEGER,
+  ends_at       TEXT,
+  closed_at     TEXT,
+  status_reason TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_listing_source_lot ON listing (source, source_lot_id);
 

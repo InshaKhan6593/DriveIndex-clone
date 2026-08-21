@@ -24,26 +24,48 @@ const LISTINGS_DIR = path.join(__dirname, "..", "samples", "listings");
 function upsertListing(db, carId, rec) {
   const existing = db.prepare("SELECT id, first_seen_at FROM listing WHERE source = ? AND source_lot_id = ?").get(rec.source, rec.source_lot_id);
   const now = rec.fetched_at || new Date().toISOString();
+  const listingType = rec.listing_type || (rec._extra?.estimateLow != null ? "auction" : "classified");
+  const listingStatus = rec.listing_status || (rec.is_active ? "live" : "unknown");
+  const priceType = rec.price_type || (rec._extra?.estimateLow != null ? "estimate" : listingType === "auction" ? "current_bid" : "asking");
   if (existing) {
     db.prepare(
-      `UPDATE listing SET price = ?, mileage = ?, is_active = ?, last_seen_at = ? WHERE id = ?`
-    ).run(rec.price, rec.mileage, rec.is_active ? 1 : 0, now, existing.id);
+      `UPDATE listing SET
+         url = COALESCE(?, url), price = ?, currency = COALESCE(?, currency),
+         mileage = COALESCE(?, mileage), vin = COALESCE(?, vin), color = COALESCE(?, color),
+         transmission = COALESCE(?, transmission), tc = COALESCE(?, tc), image_url = COALESCE(?, image_url),
+         is_active = ?, listing_type = ?, listing_status = ?, price_type = ?, current_bid = ?,
+         estimate_low = ?, estimate_high = ?, ends_at = ?, closed_at = ?, status_reason = ?,
+         last_seen_at = ? WHERE id = ?`
+    ).run(
+      rec.url, rec.price, rec.currency || "USD", rec.mileage, rec.vin_raw, rec.color,
+      rec.transmission, rec.tc, rec.image_url, rec.is_active ? 1 : 0,
+      listingType, listingStatus, priceType, rec.current_bid ?? null, rec.estimate_low ?? null,
+      rec.estimate_high ?? null, rec.ends_at ?? null, rec.closed_at ?? null, rec.status_reason ?? null,
+      now, existing.id
+    );
     return;
   }
   db.prepare(
     `INSERT INTO listing
      (id, car_id, source, source_lot_id, url, price, currency, mileage, vin, vin_normal, color,
-      transmission, tc, image_url, dom, first_seen_at, last_seen_at, is_active)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?)`
+      transmission, tc, image_url, dom, first_seen_at, last_seen_at, is_active,
+      listing_type, listing_status, price_type, current_bid, estimate_low, estimate_high,
+      ends_at, closed_at, status_reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     newId(), carId, rec.source, rec.source_lot_id, rec.url, rec.price, rec.currency || "USD",
     rec.mileage, rec.vin_raw, rec.color, rec.transmission, rec.tc, rec.image_url,
-    now, now, rec.is_active ? 1 : 0
+    now, now, rec.is_active ? 1 : 0, listingType, listingStatus, priceType,
+    rec.current_bid ?? null, rec.estimate_low ?? null, rec.estimate_high ?? null,
+    rec.ends_at ?? null, rec.closed_at ?? null, rec.status_reason ?? null
   );
 }
 
 function ingestListingRecord(db, rec, stats) {
-  if (rec.price == null) { stats.skippedNoPrice++; return; }
+  // A closed Hagerty listing may legitimately have no price (for example Withdrawn). Keep the
+  // lifecycle row so a previously-live auction can be closed deterministically; price is not a
+  // prerequisite for identity resolution or for the active/inactive state.
+  if (rec.price == null) stats.noPrice = (stats.noPrice || 0) + 1;
 
   const already = db.prepare("SELECT id FROM listing WHERE source = ? AND source_lot_id = ?").get(rec.source, rec.source_lot_id);
   // Still refresh price/last_seen_at even when already resolved, same "don't re-litigate a
@@ -88,7 +110,7 @@ function ingestListingRecord(db, rec, stats) {
 }
 
 function ingestListingFiles(db, files) {
-  const stats = { inserted: [], queued: [], skippedNoPrice: 0, structuralRejects: [], corpusStats: null };
+  const stats = { inserted: [], queued: [], skippedNoPrice: 0, noPrice: 0, structuralRejects: [], corpusStats: null };
 
   const all = [];
   for (const file of files) for (const rec of JSON.parse(fs.readFileSync(file, "utf8"))) all.push(rec);
@@ -116,7 +138,7 @@ function printReport(stats) {
   console.log(`Inserted/updated: ${stats.inserted.length}  (${newCars} created a new car, ${stats.inserted.length - newCars} attached to an existing car)`);
   console.log(`Queued for review: ${stats.queued.length}`);
   if (stats.structuralRejects.length) console.log(`Rejected by structural pattern: ${stats.structuralRejects.length}`);
-  if (stats.skippedNoPrice) console.log(`Skipped (no price): ${stats.skippedNoPrice}`);
+  if (stats.noPrice) console.log(`Retained lifecycle rows without a price: ${stats.noPrice}`);
 }
 
 if (require.main === module) {
@@ -131,4 +153,4 @@ if (require.main === module) {
   db.close();
 }
 
-module.exports = { ingestListingFiles, ingestListingRecord };
+module.exports = { ingestListingFiles, ingestListingRecord, upsertListing };

@@ -45,6 +45,14 @@ function openConnection() {
 // the column now present (every run after this one). Each entry must be safe to run every time.
 function migrate(db) {
   try { db.exec("ALTER TABLE listing ADD COLUMN source_lot_id TEXT"); } catch { /* table doesn't exist yet, or column already added */ }
+  for (const col of [
+    "listing_type", "listing_status", "price_type", "current_bid", "estimate_low", "estimate_high",
+    "ends_at", "closed_at", "status_reason",
+  ]) {
+    // SQLite's ALTER TABLE path is intentionally plain/additive. Fresh databases get the
+    // documentation comments and shape from schema.sql; old state releases are upgraded here.
+    try { db.exec(`ALTER TABLE listing ADD COLUMN ${col} ${/bid|estimate/.test(col) ? "INTEGER" : "TEXT"}`); } catch { /* already present */ }
+  }
   for (const col of ["trend_se", "trend_lcb", "trend_score"]) {
     try { db.exec(`ALTER TABLE car_valuation ADD COLUMN ${col} REAL`); } catch { /* already present */ }
   }

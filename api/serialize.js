@@ -44,7 +44,18 @@ function serializeCarSummary(car, valuation, tier) {
 }
 
 function serializeListing(listing, tier) {
-  const base = { firstSeen: listing.first_seen_at, mileage: listing.mileage };
+  const base = {
+    firstSeen: listing.first_seen_at,
+    mileage: listing.mileage,
+    listingType: listing.listing_type ?? "classified",
+    listingStatus: listing.listing_status ?? (listing.is_active ? "live" : "unknown"),
+    priceType: listing.price_type ?? "asking",
+    currentBid: listing.current_bid ?? null,
+    estimateLow: listing.estimate_low ?? null,
+    estimateHigh: listing.estimate_high ?? null,
+    endsAt: listing.ends_at ?? null,
+    closedAt: listing.closed_at ?? null,
+  };
   if (!tierAtLeast(tier, "pro")) {
     return { ...base, price: null, source: null, url: null };
   }

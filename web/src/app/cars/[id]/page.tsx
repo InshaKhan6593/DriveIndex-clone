@@ -93,27 +93,35 @@ export default async function CarDetailPage({ params }: { params: Promise<{ id: 
           </div>
         </div>
 
-        {car.buyHoldSell?.copy && (
-          <p className="text-sm text-muted-foreground border rounded-lg px-4 py-3 bg-muted/30 mb-6">{car.buyHoldSell.copy}</p>
-        )}
+        {(car.buyHoldSell?.copy || car.relatedYears.length > 0) && (
+          <div className="mb-6 space-y-4">
+            {car.buyHoldSell?.copy && (
+              <div className="rounded-lg border bg-muted/30 px-4 py-3">
+                <p className="break-words text-sm leading-6 text-muted-foreground">{car.buyHoldSell.copy}</p>
+              </div>
+            )}
 
-         {car.relatedYears.length > 0 && (
-           <details className="group mb-6" open={car.relatedYears.length <= 8}>
-             <summary className="flex cursor-pointer list-none items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground [&::-webkit-details-marker]:hidden">
-               <span>Related years</span>
-               <span className="rounded-full border px-1.5 py-0.5 normal-case tracking-normal">{car.relatedYears.length}</span>
-               <span className="ml-auto text-[11px] normal-case tracking-normal group-open:hidden">Show</span>
-               <span className="ml-auto hidden text-[11px] normal-case tracking-normal group-open:inline">Hide</span>
-             </summary>
-             <div className="mt-2 flex max-h-24 flex-wrap gap-1.5 overflow-y-auto rounded-lg border bg-muted/20 p-2">
-               {car.relatedYears.map((r) => (
-                 <Link key={r.id} href={`/cars/${r.id}`}>
-                   <Badge variant="outline" className="cursor-pointer hover:bg-accent">{r.year}</Badge>
-                 </Link>
-               ))}
-             </div>
-           </details>
-         )}
+            {car.relatedYears.length > 0 && (
+              <details className="group" open={car.relatedYears.length <= 8}>
+                <summary className="flex min-h-7 w-full cursor-pointer list-none flex-wrap items-center gap-x-2 gap-y-1 py-0.5 text-xs uppercase leading-5 tracking-wide text-muted-foreground [&::-webkit-details-marker]:hidden">
+                  <span>Related years</span>
+                  <span className="shrink-0 rounded-full border px-1.5 py-0.5 normal-case leading-4 tracking-normal">{car.relatedYears.length}</span>
+                  <span className="ml-auto shrink-0 text-[11px] normal-case tracking-normal group-open:hidden">Show</span>
+                  <span className="ml-auto hidden shrink-0 text-[11px] normal-case tracking-normal group-open:inline">Hide</span>
+                </summary>
+                <div className="mt-3 rounded-lg border bg-muted/20 p-3">
+                  <div className="flex max-h-24 flex-wrap gap-2 overflow-y-auto">
+                    {car.relatedYears.map((r) => (
+                      <Link key={r.id} href={`/cars/${r.id}`}>
+                        <Badge variant="outline" className="cursor-pointer hover:bg-accent">{r.year}</Badge>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              </details>
+            )}
+          </div>
+        )}
 
         {/* Two columns from here down: left = the long-form content you scroll through
             (chart, sales/listings, seasonality, repricer), right = the at-a-glance stats,

@@ -46,6 +46,10 @@ const STAGES = [
   // crawler discovers the recent completed-event facet and resumes one API page at a time.
   // Access requires the authorized proxy/VPN path supplied by the GitHub Actions environment.
   { name: "scrape:bj", cmd: ["crawler/barrettjackson.crawler.js", "auto"], budget: 45 * MINUTES, optional: true },
+  // Hagerty has both live Marketplace inventory and completed auction outcomes. The crawler
+  // refreshes the current window nightly and supports a 2024-2026 full backfill on demand.
+  // Access requires the authorized proxy/VPN path supplied by the GitHub Actions environment.
+  { name: "scrape:hagerty", cmd: ["crawler/hagerty.crawler.js", "auto"], budget: 45 * MINUTES, optional: true },
   // MUST run before ingest: ingest stamps price_usd from this table, and a sale dated after the
   // last row in it converts to null and silently falls out of the maths. Optional because a
   // stale table still converts every historical sale correctly — only the newest days are

@@ -28,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       sources:
-        description: "Sources to scrape: 'all', 'none', or a comma list such as bj,bat,bonhams"
+        description: "Sources to scrape: 'all', 'none', or a comma list such as hagerty,bj,bat"
         required: false
         default: "none"
       mode:
@@ -42,7 +42,7 @@ on:
       recent_days:
         description: "Days to re-check late-posted recent auction results"
         required: false
-        default: "45"
+        default: "90"
       deadline_minutes:
         description: "Per-source: stop starting new work after this many minutes"
         required: false
@@ -92,12 +92,12 @@ jobs:
           node-version: "22.20.0"
           cache: npm
 
-      # Only Cars & Bids, Mecum and Classic drive a browser. Installing Chromium for the other
-      # seven would cost a few minutes per runner for nothing.
+      # Only browser-backed sources install Chromium. Installing it for the other sources would
+      # cost a few minutes per runner for nothing.
       - name: Install dependencies
         run: |
           set -euo pipefail
-          if [ "${{ matrix.source }}" = "cab" ] || [ "${{ matrix.source }}" = "mecum" ] || [ "${{ matrix.source }}" = "bj" ]; then
+          if [ "${{ matrix.source }}" = "cab" ] || [ "${{ matrix.source }}" = "mecum" ] || [ "${{ matrix.source }}" = "bj" ] || [ "${{ matrix.source }}" = "hagerty" ]; then
             npm ci
             npx playwright install --with-deps chromium
           else
@@ -115,7 +115,7 @@ jobs:
         env:
           RUN_SOURCES: ${{ github.event.inputs.sources || 'all' }}
           RUN_MODE: ${{ github.event.inputs.mode || 'recent' }}
-          RUN_RECENT_DAYS: ${{ github.event.inputs.recent_days || '45' }}
+          RUN_RECENT_DAYS: ${{ github.event.inputs.recent_days || '90' }}
         run: |
           set -euo pipefail
           {
@@ -151,8 +151,8 @@ jobs:
       #   cab  decides when to stop by looking for records it already has ("8 batches with
       #        nothing new"). Without the file everything looks new and it walks all 40k lots.
       #   bat  is where bat-detail writes its enrichment — it rewrites that file in place.
-      #   bj   keeps the complete recent-event harvest available for idempotent re-runs and
-      #        dedicated push/manual Barrett-Jackson workflow runs.
+      #   bj/hagerty keep their complete source harvest available for idempotent re-runs and
+      #        dedicated push/manual source workflow runs.
       # Every other crawler resumes purely from its state marker and simply writes a delta, which
       # ingest folds in idempotently on (source, source_lot_id).
       - name: Restore harvest file
@@ -173,6 +173,24 @@ jobs:
             echo "::warning::$ASSET missing — ${{ matrix.source }} starts from an empty harvest."
           fi
 
+      - name: Restore Hagerty harvest files
+        if: matrix.source == 'hagerty'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p samples/scraped samples/listings
+          for SPEC in "hagerty.json.gz|samples/scraped/hagerty.json" "hagerty-listings.json.gz|samples/listings/hagerty-listings.json"; do
+            ASSET="${SPEC%%|*}"
+            DEST="${SPEC#*|}"
+            if gh release download state --pattern "$ASSET" --dir /tmp 2>/dev/null; then
+              gunzip -c "/tmp/$ASSET" > "$DEST"
+              node -e "console.log('restored', require('./$DEST').length, 'records from $ASSET')"
+            else
+              echo "::warning::$ASSET missing — Hagerty starts that dataset empty."
+            fi
+          done
+
       - name: Check Barrett-Jackson access path
         if: matrix.source == 'bj'
         env:
@@ -185,15 +203,33 @@ jobs:
             exit 1
           fi
 
+      - name: Check Hagerty access path
+        if: matrix.source == 'hagerty'
+        env:
+          HAGERTY_PROXY_URL: ${{ secrets.HAGERTY_PROXY_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HAGERTY_PROXY_URL:-}" ]; then
+            echo "::error::Hagerty requires the authorized proxy/VPN path."
+            echo "::error::Set repository secret HAGERTY_PROXY_URL, or use a self-hosted runner with equivalent access."
+            exit 1
+          fi
+
       - name: Scrape
         env:
           DELAY_MS: "2500"
           SCRAPE_MODE: ${{ github.event.inputs.mode || 'recent' }}
-          SCRAPE_RECENT_DAYS: ${{ github.event.inputs.recent_days || '45' }}
-          CRAWLER_PROXY_URL: ${{ secrets.BJ_PROXY_URL }}
+          SCRAPE_RECENT_DAYS: ${{ github.event.inputs.recent_days || '90' }}
+          BJ_PROXY_URL: ${{ secrets.BJ_PROXY_URL }}
+          HAGERTY_PROXY_URL: ${{ secrets.HAGERTY_PROXY_URL }}
           BJ_EVENT_SLUGS: ${{ vars.BJ_EVENT_SLUGS }}
         run: |
           set -uo pipefail
+          case "${{ matrix.source }}" in
+            bj) export CRAWLER_PROXY_URL="${BJ_PROXY_URL:-}" ;;
+            hagerty) export CRAWLER_PROXY_URL="${HAGERTY_PROXY_URL:-}" ;;
+            *) unset CRAWLER_PROXY_URL ;;
+          esac
           STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           DEADLINE="${{ github.event.inputs.deadline_minutes || '240' }}"
           # BaT runs its detail-page enrichment straight after the list walk, in the same job:
@@ -214,7 +250,7 @@ jobs:
             echo "source=${{ matrix.source }}"
             echo "stages=$ONLY"
             echo "mode=${{ github.event.inputs.mode || 'recent' }}"
-            echo "recent_days=${{ github.event.inputs.recent_days || '45' }}"
+            echo "recent_days=${{ github.event.inputs.recent_days || '90' }}"
             echo "started_at=$STARTED_AT"
             echo "finished_at=$FINISHED_AT"
             echo "exit_code=$code"
@@ -239,6 +275,10 @@ jobs:
             echo "### Last 80 log lines"
             tail -n 80 /tmp/scrape.log 2>/dev/null || true
           } | tee /tmp/scrape-diagnostics.log >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate Hagerty dataset format
+        if: always() && matrix.source == 'hagerty'
+        run: node validation/hagerty-format.js
 
       # Everything this source produced, handed to the build job. Harvest files are deltas for
       # most sources and the full file for bat/cab; either way ingest is idempotent.
@@ -356,7 +396,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SNAPSHOT_SOURCES: ${{ github.event.inputs.sources || 'all' }}
           SNAPSHOT_MODE: ${{ github.event.inputs.mode || 'recent' }}
-          SNAPSHOT_RECENT_DAYS: ${{ github.event.inputs.recent_days || '45' }}
+          SNAPSHOT_RECENT_DAYS: ${{ github.event.inputs.recent_days || '90' }}
         run: |
           set -euo pipefail
           SNAPSHOT_DIR="/tmp/pipeline-snapshot-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
@@ -369,10 +409,12 @@ jobs:
           [ -f samples/scraped/bat-partitioned.json ] && gzip -c samples/scraped/bat-partitioned.json > "$SNAPSHOT_DIR/bat-partitioned.json.gz" || true
           [ -f samples/scraped/cars-and-bids.json ] && gzip -c samples/scraped/cars-and-bids.json > "$SNAPSHOT_DIR/cars-and-bids.json.gz" || true
           [ -f samples/scraped/barrettjackson.json ] && gzip -c samples/scraped/barrettjackson.json > "$SNAPSHOT_DIR/barrettjackson.json.gz" || true
+          [ -f samples/scraped/hagerty.json ] && gzip -c samples/scraped/hagerty.json > "$SNAPSHOT_DIR/hagerty.json.gz" || true
+          [ -f samples/listings/hagerty-listings.json ] && gzip -c samples/listings/hagerty-listings.json > "$SNAPSHOT_DIR/hagerty-listings.json.gz" || true
           # If this source was not selected today, the build may not have unpacked its harvest
           # file. Carry forward the rolling copy so the immutable snapshot can restore state
           # exactly instead of falling back to a stale release asset after rollback.
-          for ASSET in bat-partitioned.json.gz cars-and-bids.json.gz barrettjackson.json.gz; do
+          for ASSET in bat-partitioned.json.gz cars-and-bids.json.gz barrettjackson.json.gz hagerty.json.gz hagerty-listings.json.gz; do
             if [ ! -f "$SNAPSHOT_DIR/$ASSET" ] && gh release download state --pattern "$ASSET" --dir "$SNAPSHOT_DIR" 2>/dev/null; then
               echo "carried forward $ASSET from the state release"
             fi
@@ -465,6 +507,14 @@ jobs:
           if [ -f samples/scraped/barrettjackson.json ]; then
             gzip -c samples/scraped/barrettjackson.json > /tmp/barrettjackson.json.gz
             ASSETS="$ASSETS /tmp/barrettjackson.json.gz"
+          fi
+          if [ -f samples/scraped/hagerty.json ]; then
+            gzip -c samples/scraped/hagerty.json > /tmp/hagerty.json.gz
+            ASSETS="$ASSETS /tmp/hagerty.json.gz"
+          fi
+          if [ -f samples/listings/hagerty-listings.json ]; then
+            gzip -c samples/listings/hagerty-listings.json > /tmp/hagerty-listings.json.gz
+            ASSETS="$ASSETS /tmp/hagerty-listings.json.gz"
           fi
           gh release view state >/dev/null 2>&1 || \
             gh release create state --title "Pipeline state (internal)" \

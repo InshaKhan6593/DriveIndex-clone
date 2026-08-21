@@ -108,8 +108,8 @@ export function ListingsTable({ listings }: { listings: Listing[] }) {
           <TableRow>
             <TableHead>First seen</TableHead>
             <TableHead>Mileage</TableHead>
-            <TableHead>Source</TableHead>
-            <TableHead className="text-right">Asking price</TableHead>
+            <TableHead>Type / status</TableHead>
+            <TableHead className="text-right">Price / bid</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -118,9 +118,14 @@ export function ListingsTable({ listings }: { listings: Listing[] }) {
             <TableCell className="tabular-nums">{l.firstSeen ? new Date(l.firstSeen).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}</TableCell>
             <TableCell className="tabular-nums text-muted-foreground">{l.mileage != null ? `${l.mileage.toLocaleString()} mi` : "—"}</TableCell>
             <TableCell className="capitalize text-muted-foreground">
-              {l.url ? <a href={l.url} target="_blank" rel="noopener noreferrer" className="hover:underline">{l.source}</a> : (l.source ?? "—")}
+              <div>{l.url ? <a href={l.url} target="_blank" rel="noopener noreferrer" className="hover:underline">{l.source}</a> : (l.source ?? "—")}</div>
+              <div className="text-xs normal-case">{l.listingType} · {l.listingStatus.replaceAll("_", " ")}</div>
+              {l.endsAt && <div className="text-xs normal-case">Ends {new Date(l.endsAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</div>}
             </TableCell>
-            <TableCell className="text-right font-medium tabular-nums">{l.price != null ? `$${l.price.toLocaleString()}` : "—"}</TableCell>
+            <TableCell className="text-right font-medium tabular-nums">
+              {l.price != null ? `${l.priceType === "current_bid" ? "Bid " : l.priceType === "estimate" ? "Est. " : ""}$${l.price.toLocaleString()}` : "—"}
+              {l.estimateLow != null && l.estimateHigh != null && <div className="text-xs font-normal text-muted-foreground">${l.estimateLow.toLocaleString()}–${l.estimateHigh.toLocaleString()}</div>}
+            </TableCell>
           </TableRow>
           ))}
         </TableBody>
