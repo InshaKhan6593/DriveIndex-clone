@@ -115,6 +115,15 @@ function classify(stdout, stderr, code, timedOut) {
   return { klass: "OK", advice: "" };
 }
 
+// A scraper can legitimately be very chatty, especially a browser crawler. Keep failure output
+// useful without turning one matrix job's artifact into hundreds of megabytes: the tail contains
+// the exception, response status, and the last URL in practically every failure mode.
+function diagnosticTail(text, maxLines = 120, maxChars = 24000) {
+  const lines = String(text || "").trim().split(/\r?\n/).filter(Boolean);
+  const tail = lines.slice(-maxLines).join("\n");
+  return tail.length > maxChars ? `[...truncated...]\n${tail.slice(-maxChars)}` : tail;
+}
+
 function runStage(stage) {
   const started = Date.now();
   const res = spawnSync(process.execPath, stage.cmd, {
@@ -125,14 +134,26 @@ function runStage(stage) {
     maxBuffer: 64 * 1024 * 1024,
   });
   const timedOut = res.error && res.error.code === "ETIMEDOUT";
-  const { klass, advice } = classify(res.stdout || "", res.stderr || "", res.status, timedOut);
+  const spawnError = res.error ? `${res.error.code || "SPAWN"}: ${res.error.message}` : "";
+  const stdout = String(res.stdout || "");
+  const stderr = [String(res.stderr || ""), spawnError].filter(Boolean).join("\n");
+  const { klass, advice } = classify(stdout, stderr, res.status, timedOut);
 
   // Pull the harvester's own summary line out of its output, so history records WORK DONE and
   // not merely that the process exited.
   const summary =
-    (String(res.stdout || "").match(/^\s*\d[\d,]* (?:records|sales) \(\+[\d,]+.*$/m) ||
-     String(res.stdout || "").match(/^Inserted: .*$/m) ||
-     String(res.stdout || "").match(/^\s*wrote .*$/mi) || [""])[0].trim();
+    (stdout.match(/^\s*\d[\d,]* (?:records|sales) \(\+[\d,]+.*$/m) ||
+     stdout.match(/^Inserted: .*$/m) ||
+     stdout.match(/^\s*wrote .*$/mi) || [""])[0].trim();
+
+  const diagnostics = diagnosticTail([stdout, stderr].filter(Boolean).join("\n"));
+  // Successful stages remain compact. A non-empty stderr is still shown because warnings such as
+  // a browser challenge often precede an exit-0 empty harvest; the harvest summary catches that
+  // second symptom, while this preserves the first one.
+  if (klass !== "OK" || stderr.trim()) {
+    console.log(`\n  ${stage.name} diagnostics (last ${Math.min(120, diagnostics.split(/\r?\n/).length)} lines):`);
+    console.log(diagnostics || "(no subprocess output)");
+  }
 
   return {
     stage: stage.name,
@@ -141,6 +162,7 @@ function runStage(stage) {
     exit: res.status,
     minutes: Number(((Date.now() - started) / 60000).toFixed(1)),
     summary,
+    diagnostics: klass === "OK" ? "" : diagnostics,
   };
 }
 

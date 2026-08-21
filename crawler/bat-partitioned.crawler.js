@@ -117,6 +117,9 @@ const CRITERIA = path.join(__dirname, "..", "samples", "bat-filter-criteria.json
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SORTS = ["td", "ta", "vd", "bd"];
 const STATES = ["sold", "unsold"];
+const RECENT_MODE = process.env.SCRAPE_MODE !== "full";
+const RECENT_PAGES = Math.max(1, Number(process.env.BAT_RECENT_PAGES || process.env.SCRAPE_RECENT_PAGES) || 5);
+const RECENT_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || 45;
 
 // A partition is only genuinely exhaustible if it fits in the pages we can actually walk.
 // 48 x 208 = 9,984, slightly under the 10,000 record cap -- so a partition of, say, 9,990
@@ -405,6 +408,50 @@ async function run(maxPartitions = Infinity) {
   console.log(`\nWrote ${OUT}`);
 }
 
+async function runRecent(maxCategories = Infinity) {
+  const cats = loadCategories().slice(0, maxCategories);
+  const records = new Map();
+  try {
+    for (const r of JSON.parse(fs.readFileSync(OUT, "utf8"))) records.set(`${r.source}|${r.source_lot_id}`, r);
+  } catch {}
+  const startCount = records.size;
+  let pages = 0;
+
+  console.log(`recent mode: refreshing the newest ${RECENT_PAGES} sold page(s) across ${cats.length} car categories`);
+  for (const category of cats) {
+    let categoryPages = 0;
+    for (let page = 1; page <= RECENT_PAGES; page++) {
+      const r = await fetchPage({ category: category.id, state: "sold", sort: "td", page });
+      if (r.http !== 200) {
+        console.log(`FAIL recent ${category.name} page=${page} http=${r.http}`);
+        break;
+      }
+      for (const item of r.items) {
+        const rec = adaptListingItem(item, { recent_refresh: true });
+        if (!rec) continue;
+        const age = (Date.now() - Date.parse(rec.sold_at)) / 86400000;
+        if (age >= 0 && age <= RECENT_DAYS) records.set(`${rec.source}|${rec.source_lot_id}`, rec);
+      }
+      pages++;
+      categoryPages++;
+      if (r.items.length < PER_PAGE) break;
+      await sleep(nextDelay());
+    }
+    console.log(`recent ${category.name}: ${categoryPages} page(s)`);
+    fs.mkdirSync(path.dirname(OUT), { recursive: true });
+    fs.writeFileSync(OUT, JSON.stringify([...records.values()], null, 1));
+    let state = {};
+    try { state = JSON.parse(fs.readFileSync(STATE, "utf8")); } catch {}
+    fs.writeFileSync(STATE, JSON.stringify({ ...state, recentUpdatedAt: new Date().toISOString() }, null, 1));
+  }
+
+  const dates = [...records.values()].map((r) => r.sold_at).sort();
+  console.log(`\nrecent refresh: ${records.size} records (+${records.size - startCount}), ${pages} API pages`);
+  if (dates.length) console.log(`date range ${dates[0].slice(0, 10)} -> ${dates[dates.length - 1].slice(0, 10)}`);
+  console.log(`Wrote ${OUT}`);
+}
+
 const mode = process.argv[2] || "plan";
 if (mode === "plan") plan();
+else if (mode === "run" && RECENT_MODE) runRecent(Number(process.argv[3]) || Infinity);
 else run(Number(process.argv[3]) || Infinity);

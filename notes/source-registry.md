@@ -9,7 +9,7 @@ Probed live 2026-08-15 with `node crawler/probe-all-sources.js`. Machine-readabl
 |---|---|---|---|---|---|---|
 | Bring a Trailer | `bat` | yes | **347** | yes | built | **built — 162,582 sales; all 224 partition x sort units complete, 11 partitions still capped by BaT's own 10k ceiling. Lot-page enrichment via `bat-detail` (2026-08-19)** |
 | Cars & Bids | `cab` | yes | **80** | yes | built | **built — 35,788 sales** |
-| Mecum | `mecum` | **robots.txt requires prior written permission — the operator holds it (2026-08-18)** | **116** | yes | built | **built, RUN BY HAND (no cron stage) — per-event, sitemap-discovered, page-paginated. 49,038 sales from 55 of 186 discovered events** |
+| Mecum | `mecum` | **robots.txt requires prior written permission — the operator holds it (2026-08-18)** | **116** | yes | built | **built + scheduled recent refresh — per-event, sitemap-discovered, page-paginated. 49,038 sales from 55 of 186 discovered events** |
 | RM Sotheby's | `rms` | yes | 17 | no (detail only) | built | **built — 2,753 sales + 17 listings** |
 | Gooding & Company | `good` | yes | 4 | no | **built (2026-08-16)** | **built — 2,046 sales, 41/41 auctions (COMPLETE)** |
 | Broad Arrow Auctions | `broadarrow` | yes | 1 | no (detail only) | **built (2026-08-17)** | **built — 405 sales + 174 listings, 975 of ~2,730 lots, see below** |
@@ -19,7 +19,7 @@ Probed live 2026-08-15 with `node crawler/probe-all-sources.js`. Machine-readabl
 | Classic.com | `classic` | **yes — robots.txt fully permissive** | 40 | yes | **lead adapter (staging only)** | **built — aggregator leads only; never authoritative sales** |
 | Collecting Cars | `collectingcars` | **robots.txt: `Allow: /` for `*`, but names `ClaudeBot` + `anthropic-ai` → `Disallow: /`** | 0 | no | — | **not built — see the note on named-AI blocks below** |
 | PCAR Market | `pcar` | **robots.txt names ClaudeBot, `Disallow: /`** | — | — | — | **not built — see below** |
-| **Barrett-Jackson** | `bj` | **`robots.txt` itself 403s** | — | — | — | **closed — no terms readable, so no permission establishable** |
+| **Barrett-Jackson** | `bj` | **yes via authorized VPN/proxy path (2026-08-21)** | **4,131 recent vehicles** (six completed 2025-2026 events) | API: yes | **built — API mapper verified** | **scheduled + push workflow; requires `BJ_PROXY_URL`** |
 | **Hagerty Marketplace** | `hagerty` | **`robots.txt` itself 403s** | — | — | — | **closed — same as above** |
 | Cars.com | `carscom` | **`robots.txt` itself 403s** | — | — | — | **closed — same as above** |
 
@@ -32,9 +32,8 @@ They are not equivalent, and the difference decides what a hand-written scraper 
    developing software/ML/AI. The operator holds that written permission as of **2026-08-18**,
    which is the only reason `crawler/mecum.event.crawler.js` exists. This is a grant to a NAMED
    PARTY, not a general finding: **if it lapses, stop running it** — the standing data stays,
-   collection stops. ⚠️ It is currently run BY HAND: there is no `scrape:mecum` stage in
-   `jobs/stages.js`, even though the crawler's header and earlier revisions of these notes say
-   there is. Do not read this row as precedent for the two below.
+   collection stops. It is now scheduled in recent mode; remove the `scrape:mecum` stage from
+   `jobs/stages.js` if that permission lapses. Do not read this row as precedent for the two below.
 2. **Named AI-crawler blocks.** Collecting Cars and PCAR set `User-agent: *` → `Allow: /`
    (Collecting Cars even sets `Crawl-delay: 1`) and then separately `Disallow: /` for
    `ClaudeBot`, `anthropic-ai`, `GPTBot`, `CCBot`. Those rules are aimed at AI crawlers. Nothing
@@ -45,15 +44,57 @@ They are not equivalent, and the difference decides what a hand-written scraper 
 
 ## What each status actually means
 
-**403 BLOCKED (bj, hagerty)** — the server refused a plain headless request outright. This is
-a deliberate anti-automation posture, not a broken URL. Do NOT work around it. These two need
-either an official data agreement or a decision from the client to skip them. Treating a 403
-as a puzzle to solve is how a scraping project becomes a legal problem.
+**403 BLOCKED without the authorized VPN (BJ, Hagerty)** — the server refused a plain headless
+request outright. This is a deliberate access boundary, not a broken URL. Do NOT work around it.
+BJ is now reachable through the authorized VPN-backed browser and its API flow is documented
+above; Hagerty still needs its own authorized access decision. Treating a 403 as a puzzle to solve
+is how a scraping project becomes a legal problem.
 
 **Reachable, 0 listing links (collectingcars, pcar, dupont)** — the page loaded fine but no
 vehicle links matched. Almost certainly the wrong entry URL (these sites gate results behind
 a search/filter route) rather than a block. Each needs one probing pass to find its real
 results route, same as BaT's "Results" tab and Mecum's `?saleResult[0]=sold` took.
+
+### Barrett-Jackson — recent 2025-2026 API flow verified through the VPN-backed browser (2026-08-21)
+
+The live docket page is a client-rendered shell. Its own browser session calls:
+
+```text
+GET /api/docket?page=N&type=Vehicles&size=48&slug={event}&...&eventStatus=select_preview
+```
+
+The response is JSON with `data[].attributes` and `meta.pagination`. The past-event facet
+`/api/facets/all-past-events` supplies completed event slugs. The verified recent window is:
+
+| Event | API pages | Vehicles | Sold | Sale dates |
+|---|---:|---:|---:|---|
+| 2026 Columbus | 8 | 349 | 349 | June 25-27, 2026 |
+| 2026 Palm Beach | 10 | 476 | 467 | April 16-18, 2026 |
+| 2026 Scottsdale | 27 | 1,266 | 1,220 | January 19-25, 2026 |
+| 2025 Scottsdale Fall | 13 | 602 | 588 | October 15-18, 2025 |
+| 2025 Palm Beach | 12 | 551 | 500 | April 24-26, 2025 |
+| 2025 Scottsdale | 19 | 887 | 865 | January 20-26, 2025 |
+| **Total** | **89** | **4,131** | **3,989** | |
+
+The same audit found 142 unsold/no-price rows, zero canceled rows, and no sold rows missing an
+item ID. A current 2026 Las Vegas preview returned 342 vehicles across 8 pages, with
+`is_sold: false` and `price_decimal: 0` — those are correctly rejected by the adapter and must
+never enter the sale table.
+
+The crawler now reads this API rather than depending on CSS/card selectors. `item_id` is the
+source lot key; `price_decimal` is preferred over the display string; `run_datetime` (or the
+date-only `run_date` at UTC noon) supplies `sold_at`; and `is_sold !== true`, canceled lots,
+missing dates, missing IDs and non-positive/sentinel prices are rejected. The captured fixtures
+are `samples/raw/barrettjackson-sold-api-sample.json`,
+`samples/raw/barrettjackson-api-sample.json` and
+`samples/raw/barrettjackson-api-pattern-audit.json`. The mapper test also locks recent 2025 and
+2026 record shapes. The production crawler is registered as `scrape:bj` and has a push/manual
+workflow at `.github/workflows/barrett-jackson.yml`.
+
+The earlier 403 finding still applies to a non-VPN/plain request. This successful probe was made
+through the user's authorized VPN-backed browser; the local Node/Crawlee process does not inherit
+that browser extension, so production runs need a stable `CRAWLER_PROXY_URL` or an equivalent
+authorized network path.
 
 **Prices not visible unauthenticated (rms, bon, good, broadarrow)** — the index page shows
 lots without hammer prices; the price is on the detail page. Already handled that way for
@@ -230,7 +271,7 @@ value work left in the project.**
 | Classic.com | robots.txt fully permissive | Buildable today. But it is an AGGREGATOR (`SOURCE_TRUST 9`) — useful for staging/cross-checking, never authoritative, so it adds breadth not truth. |
 | Collecting Cars | `Allow: /` for `*`, but names `ClaudeBot` + `anthropic-ai` -> `Disallow: /` | A **Terms of Service** decision, not an engineering one. Nothing in this repo crawls it. |
 | PCAR Market | names `ClaudeBot`, `Disallow: /` | Same as above. |
-| Mecum | permission-gated; operator holds written permission (2026-08-18) | **Not blocked — built.** What remains is coverage, not access: 131 of 186 discovered events are unfinished. ⚠️ It is **not scheduled** — there is no `scrape:mecum` in `jobs/stages.js`, despite the crawler's own header saying otherwise. |
+| Mecum | permission-gated; operator holds written permission (2026-08-18) | **Not blocked — built and scheduled in recent mode.** Historical coverage remains incomplete: 131 of 186 discovered events are unfinished. |
 | Barrett-Jackson | `robots.txt` itself 403s | Permission cannot be established. Needs a data agreement. |
 | Hagerty Marketplace | `robots.txt` itself 403s | Same. |
 | Cars.com | `robots.txt` itself 403s | Same. |

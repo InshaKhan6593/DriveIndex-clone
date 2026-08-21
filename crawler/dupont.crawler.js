@@ -30,6 +30,8 @@ const { adaptVdpPage } = require("./dupont-adapt");
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const HEADERS = { "User-Agent": UA, "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.9" };
 const DELAY_MS = Number(process.env.DELAY_MS) || 1500;
+const RECENT_MODE = process.env.SCRAPE_MODE !== "full";
+const RECENT_URLS = Math.max(1, Number(process.env.DUPONT_RECENT_URLS) || 200);
 
 const SITEMAP = (n) => `https://www.dupontregistry.com/vdp-sitemap-${n}.xml`;
 
@@ -91,11 +93,18 @@ async function run() {
 
   let sitemapIndex, urls;
   if (auto) {
-    console.log("auto mode: finding the first sitemap with unharvested URLs ...");
-    const pick = await firstUnfinishedSitemap(state);
-    if (!pick) { console.log("\nall 15 sitemaps fully harvested — nothing to do"); return; }
-    ({ n: sitemapIndex, urls } = pick);
-    console.log(`  -> sitemap ${sitemapIndex}\n`);
+    if (RECENT_MODE) {
+      sitemapIndex = 1;
+      urls = await fetchSitemapUrls(sitemapIndex);
+      urls = urls.slice(0, RECENT_URLS);
+      console.log(`recent mode: refreshing the newest ${urls.length} listing URLs from sitemap 1\n`);
+    } else {
+      console.log("auto mode: finding the first sitemap with unharvested URLs ...");
+      const pick = await firstUnfinishedSitemap(state);
+      if (!pick) { console.log("\nall 15 sitemaps fully harvested — nothing to do"); return; }
+      ({ n: sitemapIndex, urls } = pick);
+      console.log(`  -> sitemap ${sitemapIndex}\n`);
+    }
   } else {
     sitemapIndex = Number(process.argv[2]) || 1;
     console.log(`fetching vdp-sitemap-${sitemapIndex}.xml ...`);
@@ -106,7 +115,7 @@ async function run() {
   let added = 0, skipped = 0, processed = 0;
   for (const url of urls) {
     if (processed >= maxUrls) break;
-    if (state.done[url]) continue;
+    if (state.done[url] && !RECENT_MODE) continue;
 
     const r = await fetchText(url);
     processed++;

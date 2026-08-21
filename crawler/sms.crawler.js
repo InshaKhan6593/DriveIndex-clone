@@ -24,7 +24,9 @@ const path = require("path");
 const { adaptAuction } = require("./sms-adapt");
 
 const UA = "Mozilla/5.0 (compatible; price-index-research/1.0)";
-const SORTS = ["closed_date_desc", "closed_date_asc"];
+const SORTS = process.env.SCRAPE_MODE === "full"
+  ? ["closed_date_desc", "closed_date_asc"]
+  : ["closed_date_desc"];
 const URL_FOR = (sort) => `https://www.sothebysmotorsport.com/listings/sold/filter:sort=${sort}`;
 
 const OUT = path.join(__dirname, "..", "samples", "scraped", "sms.json");

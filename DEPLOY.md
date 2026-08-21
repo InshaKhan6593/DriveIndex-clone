@@ -3,10 +3,10 @@
 Production serves a read-only snapshot. The snapshot is rebuilt once a day by a GitHub Actions
 workflow, not by the API, and not on your machine.
 
-    daily 16:00 PKT
+    daily 04:00 America/New_York (DST-aware)
       job `plan`     decide which sources to run
-      job `scrape`   ALL 9 SOURCES IN PARALLEL, one runner each
-                     bat(+bat-detail) · cab · mecum · rms · good · sms · broadarrow · dupont · bonhams
+      job `scrape`   ALL 10 SOURCES IN PARALLEL, one runner each, recent mode
+                     bat(+bat-detail) · cab · mecum · rms · good · sms · broadarrow · dupont · bonhams · bj
       job `build`    fx -> ingest -> ingest:listings -> compute
                        -> data/serving.sqlite
                        -> push the DIFF into Turso   (what the API reads)
@@ -14,7 +14,8 @@ workflow, not by the API, and not on your machine.
     Vercel           serves the API (serverless) and the Next.js frontend
     Turso            holds the data the API queries
 
-**Every scraper runs.** The full pipeline budgets 505 minutes and GitHub kills a job at 360, so
+**Every configured source can run.** Scheduled execution uses recent mode; historical backfills
+are manual. The full pipeline budgets 505 minutes and GitHub kills a job at 360, so
 one long job could never hold it — but the scrapers are independent (each writes its own harvest
 file and its own resume marker; only ingest touches the database). Running them as a parallel
 matrix gives **each source its own 6-hour budget** instead of a slice of a shared one, and the
@@ -66,6 +67,13 @@ change and the very next request sees them.
 The snapshot is still published to `data-latest` on every run. It is the rollback point, and it
 is what the next day's run diffs against — so it costs nothing extra to keep.
 
+Each successful build also stores an **immutable `pipeline-snapshot-<run_id>-<attempt>` artifact**
+for 90 days. It contains the compressed working database, serving snapshot, crawler resume state,
+the carried-forward harvest files, a manifest with row counts and run inputs, and `SHA256SUMS`.
+The rolling `state` and `data-latest` releases are still used by the next run; the immutable
+artifact is the history that makes a rollback possible. Per-source scraper diagnostics and build
+logs are retained for 30 days, while the larger per-run harvest artifacts are retained for 3 days.
+
 ---
 
 # First-time setup
@@ -75,8 +83,10 @@ is what the next day's run diffs against — so it costs nothing extra to keep.
 The workflow **continues** an existing corpus. It must never start from an empty database, so it
 fails loudly if this release is missing rather than re-scraping 262k sales from zero.
 
-Pack the four assets (already done once — they are sitting in `data/state-upload/`; re-run only
-if you want a fresher seed):
+Pack the four bootstrap assets (already done once — they are sitting in `data/state-upload/`; re-run
+only if you want a fresher seed). Barrett-Jackson's harvest is optional at bootstrap: the first
+successful BJ run creates `barrettjackson.json.gz` and the workflow adds it to the rolling state
+automatically.
 
 ```bash
 node -e "const{DatabaseSync}=require('node:sqlite');const fs=require('fs');fs.mkdirSync('data/state-upload',{recursive:true});fs.rmSync('data/state-upload/driveindex.sqlite',{force:true});new DatabaseSync('data/driveindex.sqlite',{readOnly:true}).exec(\"VACUUM INTO 'data/state-upload/driveindex.sqlite'\")"
@@ -103,10 +113,10 @@ Then on GitHub: **Releases → Draft a new release → tag `state`** → title "
 | `bat-partitioned.json.gz` | 16 MB | the `bat` job — `bat-detail` writes enrichment into it |
 | `cars-and-bids.json.gz` | 6 MB | the `cab` job — it decides when to stop by what it already has |
 
-Only those two harvest files are carried. Every other crawler resumes from its state marker alone
-and just writes a delta, which ingest folds in idempotently on `(source, source_lot_id)` — so the
-database already holds whatever an older file contained. Gzip is what makes this cheap: BaT's
-harvest is 190 MB raw and 16 MB compressed.
+Only the harvest files that crawlers read back are carried. Every other crawler resumes from its
+state marker alone and just writes a delta, which ingest folds in idempotently on
+`(source, source_lot_id)` — so the database already holds whatever an older file contained. Gzip
+is what makes this cheap: BaT's harvest is 190 MB raw and 16 MB compressed.
 
 ⚠️ The tag must be exactly `state`. The workflow looks it up by name.
 
@@ -204,8 +214,8 @@ data **without any redeploy** — that last part is the whole point of reading f
 
 # The daily run
 
-[.github/workflows/daily.yml](.github/workflows/daily.yml), `0 11 * * *` UTC = **16:00 (4 PM)
-Pakistan time**, which is UTC+5 year-round with no DST to track.
+[.github/workflows/daily.yml](.github/workflows/daily.yml) runs at **04:00 US Eastern local time**.
+The workflow uses GitHub's timezone-aware schedule, so daylight saving time is handled.
 
 GitHub's scheduler is best-effort: at busy times it starts 15–30 minutes late and it is
 occasionally dropped altogether. That is expected rather than a bug to chase — every crawler is
@@ -213,13 +223,18 @@ incremental, so a missed day is absorbed by the next run.
 
 ## Running specific sources by hand
 
-**Actions → daily → Run workflow** takes a `sources` input:
+**Actions → daily → Run workflow** takes `sources`, `mode`, and `recent_days` inputs:
 
 | input | effect |
 |---|---|
-| `all` (default) | every source |
-| `none` | skip scraping entirely — just ingest whatever is staged, recompute, publish |
+| `none` (manual default) | skip scraping; ingest/recompute the existing staged data |
+| `all` (schedule behavior) | every source's recent path |
+| `bj` | only Barrett-Jackson's current and previous event years |
 | `bat,bonhams` | only those two, each on its own runner |
+
+Use `mode=recent` (the default) for a date-current refresh. Use `mode=full` only for an intentional
+historical backfill. Barrett-Jackson also requires the repository secret `BJ_PROXY_URL`; a desktop
+browser VPN is not inherited by a GitHub-hosted runner.
 
 An unknown name **fails the run** rather than quietly producing an empty matrix, which would look
 like a green run that scraped nothing. Test the selection logic locally without GitHub:
@@ -297,6 +312,11 @@ pick your work up on its next pass — the database it downloads is the one you 
   deployed over good data.
 * **State is saved even when scraping failed** (`if: always()`), so a partial day is not thrown
   away.
+* **Every source writes a diagnostic artifact** with its exit code, timestamps, harvest counts/date
+  range, and the last 80 scraper log lines. A source returning zero records is therefore visible in
+  both the job summary and a downloadable 30-day artifact.
+* **The immutable snapshot is checksum- and row-count-validated** before it is stored, so a
+  rollback cannot silently restore a truncated database.
 * **`concurrency: pipeline`** — a late run waits instead of racing; two runs would fight over the
   state release and one side's work would vanish.
 * **Lock files are never carried between machines.** `data/cron.lock` names a PID that means
@@ -316,6 +336,20 @@ node db/export-serving.js
 
 Then attach `data/serving.sqlite` to the `data-latest` release (replacing the existing asset) and
 hit the Render deploy hook, or just let the next scheduled run do both.
+
+## Rolling back a bad build
+
+If a scraper or mapper produced a bad but technically valid update, open **Actions → Roll back
+pipeline snapshot → Run workflow**. Enter the `run_id` and `run_attempt` of the good daily run,
+then type `ROLLBACK` in the confirmation field. The workflow verifies `SHA256SUMS`, opens both
+SQLite files, checks their manifest row counts, diffs the target serving snapshot against the
+current `data-latest`, loads that diff into Turso, and only then replaces the rolling `state` and
+`data-latest` assets. The run keeps validation/publish logs as a 90-day artifact.
+
+The rollback workflow requires `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`. It refuses to perform
+an unbounded full Turso reload if the current `data-latest` asset is missing, because that could
+consume the free-tier write budget unexpectedly. A rollback does not delete the newer immutable
+artifacts, so you can choose another snapshot afterward if needed.
 
 ## Region pinning — why `iad1` is in both vercel.json files
 

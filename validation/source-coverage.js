@@ -28,7 +28,7 @@ const AUCTION = [
 
 // Why each absent source is absent — established by probing, not assumed.
 const WHY = {
-  bj: "403 blocked — needs a commercial/legal decision",
+  bj: "Recent 2025-2026 API crawler built; GitHub Actions requires BJ_PROXY_URL",
   hagerty: "403 blocked — needs a commercial/legal decision",
   collectingcars: "403 blocked — needs a commercial/legal decision",
   dupont: "carries ASKING prices — belongs in `listing`, never `sale`",

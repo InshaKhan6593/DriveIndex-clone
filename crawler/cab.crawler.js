@@ -32,7 +32,8 @@ const { PlaywrightCrawler } = require("crawlee");
 const { adaptAuction } = require("./cab-adapt");
 
 const OUT = path.join(__dirname, "..", "samples", "scraped", "cars-and-bids.json");
-const FULL = process.argv.includes("--full");
+const FULL = process.argv.includes("--full") || process.env.SCRAPE_MODE === "full";
+const RECENT_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || 45;
 const MAX_SCROLLS = Number(process.argv.find((a) => /^\d+$/.test(a))) || (FULL ? 1200 : 60);
 const STOP_AFTER_KNOWN = 8; // consecutive all-known batches before an incremental run stops
 
@@ -56,6 +57,7 @@ function absorb(payload) {
 
     const out = adaptAuction(a);
     if (out.kind !== "sale") { skipped++; if (out.kind === "error") adaptFailures++; continue; }
+    if (!FULL && (Date.now() - Date.parse(out.record.sold_at)) / 86400000 > RECENT_DAYS) continue;
     const k = `${out.record.source}|${out.record.source_lot_id}`;
     if (!byKey.has(k)) added++;
     byKey.set(k, out.record);

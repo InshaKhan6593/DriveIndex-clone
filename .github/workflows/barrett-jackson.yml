@@ -1,0 +1,119 @@
+name: Barrett-Jackson recent sales
+
+on:
+  push:
+    paths:
+      - "crawler/barrettjackson*"
+      - "jobs/stages.js"
+      - "package.json"
+      - ".github/workflows/barrett-jackson.yml"
+  workflow_dispatch:
+    inputs:
+      event_slugs:
+        description: "Optional comma-separated BJ event slugs; blank discovers the current and previous event years"
+        required: false
+        default: ""
+      max_pages:
+        description: "Maximum API pages per event"
+        required: false
+        default: "400"
+
+concurrency:
+  # Share the daily pipeline lock because both workflows update the same state release.
+  group: pipeline
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22.20.0"
+          cache: npm
+
+      - name: Install dependencies and Chromium
+        run: |
+          set -euo pipefail
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Check every file parses
+        run: node validation/syntax-check.js
+
+      - name: Restore Barrett-Jackson state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p data samples/scraped
+          if gh release download state --pattern 'crawler-state.tar.gz' --dir /tmp/bj-state 2>/dev/null; then
+            tar -xzf /tmp/bj-state/crawler-state.tar.gz
+            echo "resume markers restored"
+          else
+            echo "::warning::No crawler-state.tar.gz found; starting with local state only."
+          fi
+          if gh release download state --pattern 'barrettjackson.json.gz' --dir /tmp/bj-state 2>/dev/null; then
+            gunzip -c /tmp/bj-state/barrettjackson.json.gz > samples/scraped/barrettjackson.json
+            node -e "console.log('restored', require('./samples/scraped/barrettjackson.json').length, 'Barrett-Jackson records')"
+          fi
+          rm -f data/cron.lock data/barrettjackson-crawler.lock
+
+      - name: Check Barrett-Jackson access path
+        env:
+          CRAWLER_PROXY_URL: ${{ secrets.BJ_PROXY_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CRAWLER_PROXY_URL:-}" ]; then
+            echo "::error::Set repository secret BJ_PROXY_URL to an authorized proxy/VPN endpoint."
+            echo "::error::A GitHub-hosted runner cannot inherit the VPN from your desktop browser."
+            exit 1
+          fi
+
+      - name: Harvest recent completed events
+        env:
+          CRAWLER_PROXY_URL: ${{ secrets.BJ_PROXY_URL }}
+          SCRAPE_MODE: recent
+          SCRAPE_RECENT_DAYS: "45"
+          BJ_EVENT_SLUGS: ${{ github.event.inputs.event_slugs || '' }}
+          BJ_MAX_PAGES: ${{ github.event.inputs.max_pages || '400' }}
+        run: node crawler/barrettjackson.crawler.js auto
+
+      - name: Validate the harvest
+        run: |
+          set -euo pipefail
+          node crawler/barrettjackson-adapt.test.js
+          node -e "const fs=require('fs');const p='samples/scraped/barrettjackson.json';const r=JSON.parse(fs.readFileSync(p,'utf8'));if(!Array.isArray(r)||!r.length)throw new Error('Barrett-Jackson harvest is empty');console.log('harvest:',r.length,'records; events:',[...new Set(r.map(x=>x._extra?.event).filter(Boolean))].join(', '))"
+
+      - name: Upload harvest artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: barrett-jackson-harvest
+          path: |
+            samples/scraped/barrettjackson.json
+            samples/barrettjackson.state.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Save Barrett-Jackson state for the next run
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [ -f samples/scraped/barrettjackson.json ] || { echo "harvest file missing"; exit 1; }
+          STATE_ITEMS="$(find samples -name '*.state.json' -print)"
+          [ -f data/fx-rates.json ] && STATE_ITEMS="$STATE_ITEMS data/fx-rates.json"
+          tar -czf /tmp/crawler-state.tar.gz $STATE_ITEMS
+          gzip -c samples/scraped/barrettjackson.json > /tmp/barrettjackson.json.gz
+          gh release view state >/dev/null 2>&1 || \
+            gh release create state --title "Pipeline state (internal)" \
+              --notes "Working database, crawler resume markers, and harvest files consumed by the scheduled pipeline."
+          gh release upload state /tmp/crawler-state.tar.gz /tmp/barrettjackson.json.gz --clobber

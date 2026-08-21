@@ -42,6 +42,10 @@ const STAGES = [
   // on the multi-page car sales) 1200 fits inside the 45 minutes below with room to spare. The
   // crawler resumes from its own state file, so each run continues where the last one stopped.
   { name: "scrape:bonhams", cmd: ["crawler/bonhams.crawler.js", "1200"], budget: 45 * MINUTES, optional: true },
+  // Barrett-Jackson exposes completed 2025-2026 vehicle results through its docket API. The
+  // crawler discovers the recent completed-event facet and resumes one API page at a time.
+  // Access requires the authorized proxy/VPN path supplied by the GitHub Actions environment.
+  { name: "scrape:bj", cmd: ["crawler/barrettjackson.crawler.js", "auto"], budget: 45 * MINUTES, optional: true },
   // MUST run before ingest: ingest stamps price_usd from this table, and a sale dated after the
   // last row in it converts to null and silently falls out of the maths. Optional because a
   // stale table still converts every historical sale correctly — only the newest days are

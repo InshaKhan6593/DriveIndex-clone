@@ -1,0 +1,168 @@
+name: Roll back pipeline snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      snapshot_run_id:
+        description: "GitHub Actions run ID containing the immutable snapshot artifact"
+        required: true
+        type: string
+      snapshot_attempt:
+        description: "Run attempt number, normally 1"
+        required: true
+        default: "1"
+        type: string
+      confirmation:
+        description: "Type ROLLBACK to confirm restoring this snapshot"
+        required: true
+        type: string
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.20.0"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --omit=dev
+
+      - name: Confirm destructive operation
+        env:
+          CONFIRMATION: ${{ github.event.inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRMATION" != "ROLLBACK" ]; then
+            echo "::error::Type ROLLBACK exactly in the confirmation field. Nothing was changed."
+            exit 1
+          fi
+
+      - name: Download immutable snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SNAPSHOT_RUN_ID: ${{ github.event.inputs.snapshot_run_id }}
+          SNAPSHOT_ATTEMPT: ${{ github.event.inputs.snapshot_attempt }}
+        run: |
+          set -euo pipefail
+          case "$SNAPSHOT_RUN_ID" in ''|*[!0-9]*) echo "::error::snapshot_run_id must be numeric"; exit 1 ;; esac
+          case "$SNAPSHOT_ATTEMPT" in ''|*[!0-9]*) echo "::error::snapshot_attempt must be numeric"; exit 1 ;; esac
+          SNAPSHOT_NAME="pipeline-snapshot-${SNAPSHOT_RUN_ID}-${SNAPSHOT_ATTEMPT}"
+          rm -rf /tmp/rollback
+          mkdir -p /tmp/rollback
+          gh run view "$SNAPSHOT_RUN_ID" --repo "$GITHUB_REPOSITORY" --json databaseId,workflowName,status,conclusion,headSha
+          gh run download "$SNAPSHOT_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$SNAPSHOT_NAME" --dir /tmp/rollback
+          find /tmp/rollback -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+
+      - name: Validate snapshot
+        run: |
+          set -euo pipefail
+          {
+            cd /tmp/rollback
+            test -f manifest.json
+            test -f SHA256SUMS
+            sha256sum -c SHA256SUMS
+            gzip -t driveindex.sqlite.gz
+            gzip -t serving.sqlite.gz
+            gzip -t crawler-state.tar.gz
+            gunzip -c driveindex.sqlite.gz > /tmp/rollback-driveindex.sqlite
+            gunzip -c serving.sqlite.gz > /tmp/rollback-serving.sqlite
+            node - <<'NODE'
+            const fs = require("fs");
+            const { DatabaseSync } = require("node:sqlite");
+            const manifest = JSON.parse(fs.readFileSync("/tmp/rollback/manifest.json", "utf8"));
+            const db = new DatabaseSync("/tmp/rollback-driveindex.sqlite", { readOnly: true });
+            const serving = new DatabaseSync("/tmp/rollback-serving.sqlite", { readOnly: true });
+            const count = (database, table) => Number(database.prepare(`SELECT COUNT(*) n FROM "${table}"`).get().n);
+            const actual = {
+              sale_count: count(db, "sale"),
+              car_count: count(db, "car"),
+              serving_car_count: count(serving, "car"),
+            };
+            for (const key of Object.keys(actual)) {
+              if (actual[key] !== Number(manifest[key])) throw new Error(`${key}: manifest=${manifest[key]} actual=${actual[key]}`);
+            }
+            if (!actual.car_count || !actual.serving_car_count) throw new Error("refusing an empty snapshot");
+            console.log(JSON.stringify({ manifest, actual }, null, 2));
+          NODE
+          } 2>&1 | tee /tmp/rollback-validation.log
+
+      - name: Load rollback into Turso and publish rolling assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          {
+            if [ -z "${TURSO_DATABASE_URL:-}" ] || [ -z "${TURSO_AUTH_TOKEN:-}" ]; then
+              echo "::error::TURSO_DATABASE_URL and TURSO_AUTH_TOKEN are required for a complete rollback."
+              echo "::error::Nothing has been published yet."
+              exit 1
+            fi
+
+            rm -rf /tmp/rollback-current
+            mkdir -p /tmp/rollback-current
+            if ! gh release download data-latest --pattern 'serving.sqlite' --dir /tmp/rollback-current 2>/dev/null; then
+              echo "::error::The rolling data-latest asset is missing; refusing an unbounded full Turso reload."
+              exit 1
+            fi
+
+            node db/load-turso.js /tmp/rollback-serving.sqlite /tmp/rollback-current/serving.sqlite
+
+            gh release view state >/dev/null 2>&1 || \
+              gh release create state --title "Pipeline state (internal)" \
+                --notes "Working database, crawler resume markers, and harvest files."
+            ASSETS="/tmp/rollback/driveindex.sqlite.gz /tmp/rollback/crawler-state.tar.gz"
+            for ASSET in bat-partitioned.json.gz cars-and-bids.json.gz barrettjackson.json.gz; do
+              if [ -f "/tmp/rollback/$ASSET" ]; then ASSETS="$ASSETS /tmp/rollback/$ASSET"; fi
+            done
+            gh release upload state $ASSETS --clobber
+
+            gh release view data-latest >/dev/null 2>&1 || \
+              gh release create data-latest --title "Serving snapshot (rolling)" \
+                --notes "Read-only snapshot served by the API."
+            cp /tmp/rollback-serving.sqlite /tmp/serving.sqlite
+            gh release upload data-latest /tmp/serving.sqlite --clobber
+            echo "rollback published: Turso, state release, and data-latest"
+          } 2>&1 | tee /tmp/rollback-publish.log
+
+      - name: Write rollback summary
+        if: always()
+        run: |
+          {
+            echo "## Pipeline rollback"
+            echo "snapshot_run_id=${{ github.event.inputs.snapshot_run_id }}"
+            echo "snapshot_attempt=${{ github.event.inputs.snapshot_attempt }}"
+            if [ -f /tmp/rollback/manifest.json ]; then
+              echo
+              cat /tmp/rollback/manifest.json
+            fi
+            echo
+            echo "The validation and publish logs are attached to this workflow run."
+          } | tee /tmp/rollback-summary.log >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload rollback logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/rollback-validation.log
+            /tmp/rollback-publish.log
+            /tmp/rollback-summary.log
+            /tmp/rollback/manifest.json
+          if-no-files-found: ignore
+          retention-days: 90

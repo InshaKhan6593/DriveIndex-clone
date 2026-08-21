@@ -1,4 +1,4 @@
-# DAILY PIPELINE — every source, then ingest -> compute -> publish.
+# DAILY PIPELINE — recent source updates, then ingest -> compute -> publish.
 #
 # WHY HERE AND NOT ON RENDER: Render's free tier has no cron jobs and no persistent disks, so it
 # cannot run this, and could not keep the 294MB working database between runs if it could.
@@ -21,17 +21,28 @@ name: daily
 
 on:
   schedule:
-    # 11:00 UTC = 16:00 (4 PM) Pakistan Standard Time, which is UTC+5 year-round (no DST).
-    # GitHub cron is UTC-only and best-effort: at busy times it starts 15-30 minutes late, and it
-    # is occasionally dropped entirely. Expected, not a bug to chase — every crawler is
-    # incremental, so whatever a missed day would have collected is absorbed by the next run.
-    - cron: "0 11 * * *"
+    # GitHub supports an IANA timezone here: run at 04:00 US Eastern local time, including DST.
+    # The schedule is deliberately recent-mode; a historical backfill must be requested manually.
+    - cron: "0 4 * * *"
+      timezone: "America/New_York"
   workflow_dispatch:
     inputs:
       sources:
-        description: "Which sources to scrape: 'all', 'none', or a comma list e.g. bat,bonhams"
+        description: "Sources to scrape: 'all', 'none', or a comma list such as bj,bat,bonhams"
         required: false
-        default: "all"
+        default: "none"
+      mode:
+        description: "recent refreshes current windows; full continues historical backfills"
+        required: false
+        type: choice
+        options:
+          - recent
+          - full
+        default: recent
+      recent_days:
+        description: "Days to re-check late-posted recent auction results"
+        required: false
+        default: "45"
       deadline_minutes:
         description: "Per-source: stop starting new work after this many minutes"
         required: false
@@ -69,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     strategy:
-      fail-fast: false # one auction site being down must not cancel the other nine
+      fail-fast: false # one auction site being down must not cancel the other sources
       max-parallel: 6 # polite: do not open ten scrapers at once from one IP range
       matrix:
         source: ${{ fromJSON(needs.plan.outputs.matrix) }}
@@ -86,7 +97,7 @@ jobs:
       - name: Install dependencies
         run: |
           set -euo pipefail
-          if [ "${{ matrix.source }}" = "cab" ] || [ "${{ matrix.source }}" = "mecum" ]; then
+          if [ "${{ matrix.source }}" = "cab" ] || [ "${{ matrix.source }}" = "mecum" ] || [ "${{ matrix.source }}" = "bj" ]; then
             npm ci
             npx playwright install --with-deps chromium
           else
@@ -99,6 +110,26 @@ jobs:
       # suite cannot catch it; this can.
       - name: Check every file parses
         run: node validation/syntax-check.js
+
+      - name: Initialize run manifest
+        env:
+          RUN_SOURCES: ${{ github.event.inputs.sources || 'all' }}
+          RUN_MODE: ${{ github.event.inputs.mode || 'recent' }}
+          RUN_RECENT_DAYS: ${{ github.event.inputs.recent_days || '45' }}
+        run: |
+          set -euo pipefail
+          {
+            echo "workflow=daily"
+            echo "run_id=${GITHUB_RUN_ID}"
+            echo "run_attempt=${GITHUB_RUN_ATTEMPT}"
+            echo "sha=${GITHUB_SHA}"
+            echo "ref=${GITHUB_REF}"
+            echo "event=${GITHUB_EVENT_NAME}"
+            echo "sources=${RUN_SOURCES}"
+            echo "mode=${RUN_MODE}"
+            echo "recent_days=${RUN_RECENT_DAYS}"
+            echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > /tmp/pipeline-run-manifest.txt
 
       - name: Restore resume markers
         env:
@@ -116,14 +147,16 @@ jobs:
           # A lock restored from another machine names a PID that means nothing on this runner.
           rm -f data/cron.lock data/bat-detail.lock
 
-      # Only two crawlers READ their own harvest file back, and for different reasons:
+      # Three crawlers READ their own harvest file back, and for different reasons:
       #   cab  decides when to stop by looking for records it already has ("8 batches with
       #        nothing new"). Without the file everything looks new and it walks all 40k lots.
       #   bat  is where bat-detail writes its enrichment — it rewrites that file in place.
+      #   bj   keeps the complete recent-event harvest available for idempotent re-runs and
+      #        dedicated push/manual Barrett-Jackson workflow runs.
       # Every other crawler resumes purely from its state marker and simply writes a delta, which
       # ingest folds in idempotently on (source, source_lot_id).
       - name: Restore harvest file
-        if: matrix.source == 'cab' || matrix.source == 'bat'
+        if: matrix.source == 'cab' || matrix.source == 'bat' || matrix.source == 'bj'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -131,6 +164,7 @@ jobs:
           case "${{ matrix.source }}" in
             cab) ASSET=cars-and-bids.json.gz; DEST=samples/scraped/cars-and-bids.json ;;
             bat) ASSET=bat-partitioned.json.gz; DEST=samples/scraped/bat-partitioned.json ;;
+            bj) ASSET=barrettjackson.json.gz; DEST=samples/scraped/barrettjackson.json ;;
           esac
           if gh release download state --pattern "$ASSET" --dir /tmp 2>/dev/null; then
             gunzip -c "/tmp/$ASSET" > "$DEST"
@@ -139,11 +173,28 @@ jobs:
             echo "::warning::$ASSET missing — ${{ matrix.source }} starts from an empty harvest."
           fi
 
+      - name: Check Barrett-Jackson access path
+        if: matrix.source == 'bj'
+        env:
+          CRAWLER_PROXY_URL: ${{ secrets.BJ_PROXY_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CRAWLER_PROXY_URL:-}" ]; then
+            echo "::error::Barrett-Jackson requires the authorized proxy/VPN path."
+            echo "::error::Set repository secret BJ_PROXY_URL, or use a self-hosted runner with equivalent access."
+            exit 1
+          fi
+
       - name: Scrape
         env:
           DELAY_MS: "2500"
+          SCRAPE_MODE: ${{ github.event.inputs.mode || 'recent' }}
+          SCRAPE_RECENT_DAYS: ${{ github.event.inputs.recent_days || '45' }}
+          CRAWLER_PROXY_URL: ${{ secrets.BJ_PROXY_URL }}
+          BJ_EVENT_SLUGS: ${{ vars.BJ_EVENT_SLUGS }}
         run: |
           set -uo pipefail
+          STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           DEADLINE="${{ github.event.inputs.deadline_minutes || '240' }}"
           # BaT runs its detail-page enrichment straight after the list walk, in the same job:
           # both read and rewrite bat-partitioned.json, so they must never run concurrently.
@@ -154,9 +205,35 @@ jobs:
           fi
           node jobs/cron.js --only="$ONLY" --deadline-minutes="$DEADLINE" 2>&1 | tee /tmp/scrape.log
           code=${PIPESTATUS[0]}
+          FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "source=${{ matrix.source }}"
+            echo "stages=$ONLY"
+            echo "mode=${{ github.event.inputs.mode || 'recent' }}"
+            echo "recent_days=${{ github.event.inputs.recent_days || '45' }}"
+            echo "started_at=$STARTED_AT"
+            echo "finished_at=$FINISHED_AT"
+            echo "exit_code=$code"
+          } > /tmp/scrape-result.txt
           # cron.js: 0 clean, 1 an optional source failed, 2 the pipeline itself failed. A source
           # being unreachable is a normal day, so only 2 fails this job.
           if [ "$code" -ge 2 ]; then exit 1; fi
+
+      - name: Write scraper diagnostics
+        if: always()
+        run: |
+          set +e
+          node .github/scripts/summarise-harvest.js > /tmp/harvest-summary.log 2>&1
+          {
+            echo "## Scraper diagnostics — ${{ matrix.source }}"
+            cat /tmp/scrape-result.txt 2>/dev/null || true
+            echo
+            echo "### Harvest summary"
+            cat /tmp/harvest-summary.log 2>/dev/null || true
+            echo
+            echo "### Last 80 log lines"
+            tail -n 80 /tmp/scrape.log 2>/dev/null || true
+          } | tee /tmp/scrape-diagnostics.log >> "$GITHUB_STEP_SUMMARY"
 
       # Everything this source produced, handed to the build job. Harvest files are deltas for
       # most sources and the full file for bat/cab; either way ingest is idempotent.
@@ -170,6 +247,21 @@ jobs:
             samples/listings/*.json
           if-no-files-found: ignore
           retention-days: 3
+
+      - name: Upload scraper diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-diagnostics-${{ matrix.source }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/scrape.log
+            /tmp/scrape-result.txt
+            /tmp/scrape-diagnostics.log
+            /tmp/harvest-summary.log
+            data/cron-history.jsonl
+            samples/**/*.state.json
+          if-no-files-found: ignore
+          retention-days: 30
 
   # ── BUILD — ingest, recompute, publish. Serial by nature: one database. ───────────────────
   build:
@@ -227,8 +319,11 @@ jobs:
 
       - name: Show what arrived
         run: |
-          ls -la samples/scraped/ samples/listings/ 2>/dev/null || true
-          node .github/scripts/summarise-harvest.js || true
+          {
+            echo "## Harvests received by build"
+            ls -la samples/scraped/ samples/listings/ 2>/dev/null || true
+            node .github/scripts/summarise-harvest.js || true
+          } | tee /tmp/harvest-summary.log >> "$GITHUB_STEP_SUMMARY"
 
       - name: Ingest and recompute
         run: |
@@ -245,6 +340,49 @@ jobs:
           node db/export-serving.js
           ls -la data/serving.sqlite
           node -e "const{DatabaseSync}=require('node:sqlite');const d=new DatabaseSync('data/serving.sqlite',{readOnly:true});const c=d.prepare('SELECT COUNT(*) n FROM car').get().n;if(!c)throw new Error('snapshot has 0 cars - refusing to publish');console.log('snapshot ok:',c,'cars')"
+
+      # Immutable per-run backup. This is uploaded before Turso/release publication so a later
+      # publish failure still leaves a complete rollback point for this successful build.
+      - name: Prepare immutable rollback snapshot
+        id: snapshot
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SNAPSHOT_SOURCES: ${{ github.event.inputs.sources || 'all' }}
+          SNAPSHOT_MODE: ${{ github.event.inputs.mode || 'recent' }}
+          SNAPSHOT_RECENT_DAYS: ${{ github.event.inputs.recent_days || '45' }}
+        run: |
+          set -euo pipefail
+          SNAPSHOT_DIR="/tmp/pipeline-snapshot-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export SNAPSHOT_DIR
+          rm -rf "$SNAPSHOT_DIR"
+          mkdir -p "$SNAPSHOT_DIR"
+          gzip -c data/driveindex.sqlite > "$SNAPSHOT_DIR/driveindex.sqlite.gz"
+          gzip -c data/serving.sqlite > "$SNAPSHOT_DIR/serving.sqlite.gz"
+          tar -czf "$SNAPSHOT_DIR/crawler-state.tar.gz" $(find samples -name '*.state.json') data/fx-rates.json
+          [ -f samples/scraped/bat-partitioned.json ] && gzip -c samples/scraped/bat-partitioned.json > "$SNAPSHOT_DIR/bat-partitioned.json.gz" || true
+          [ -f samples/scraped/cars-and-bids.json ] && gzip -c samples/scraped/cars-and-bids.json > "$SNAPSHOT_DIR/cars-and-bids.json.gz" || true
+          [ -f samples/scraped/barrettjackson.json ] && gzip -c samples/scraped/barrettjackson.json > "$SNAPSHOT_DIR/barrettjackson.json.gz" || true
+          # If this source was not selected today, the build may not have unpacked its harvest
+          # file. Carry forward the rolling copy so the immutable snapshot can restore state
+          # exactly instead of falling back to a stale release asset after rollback.
+          for ASSET in bat-partitioned.json.gz cars-and-bids.json.gz barrettjackson.json.gz; do
+            if [ ! -f "$SNAPSHOT_DIR/$ASSET" ] && gh release download state --pattern "$ASSET" --dir "$SNAPSHOT_DIR" 2>/dev/null; then
+              echo "carried forward $ASSET from the state release"
+            fi
+          done
+          node -e "const fs=require('fs');const{DatabaseSync}=require('node:sqlite');const db=new DatabaseSync('data/driveindex.sqlite',{readOnly:true});const serving=new DatabaseSync('data/serving.sqlite',{readOnly:true});const get=(d,q)=>d.prepare(q).get().n;const m={snapshot_id:process.env.GITHUB_RUN_ID+'-'+process.env.GITHUB_RUN_ATTEMPT,workflow:'daily',run_id:process.env.GITHUB_RUN_ID,run_attempt:process.env.GITHUB_RUN_ATTEMPT,sha:process.env.GITHUB_SHA,ref:process.env.GITHUB_REF,event:process.env.GITHUB_EVENT_NAME,sources:process.env.SNAPSHOT_SOURCES,mode:process.env.SNAPSHOT_MODE,recent_days:process.env.SNAPSHOT_RECENT_DAYS,created_at:new Date().toISOString(),sale_count:get(db,'SELECT COUNT(*) n FROM sale'),car_count:get(db,'SELECT COUNT(*) n FROM car'),serving_car_count:get(serving,'SELECT COUNT(*) n FROM car')};fs.writeFileSync(process.env.SNAPSHOT_DIR+'/manifest.json',JSON.stringify(m,null,2));"
+          (cd "$SNAPSHOT_DIR" && find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | xargs -0 sha256sum > SHA256SUMS)
+          ls -lh "$SNAPSHOT_DIR"
+
+      - name: Store immutable rollback snapshot
+        if: ${{ always() && steps.snapshot.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-snapshot-${{ github.run_id }}-${{ github.run_attempt }}
+          path: /tmp/pipeline-snapshot-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
 
       # The PREVIOUS snapshot is what the Turso load diffs against, and it is already published
       # as data-latest — so it costs nothing extra to store. It must be fetched BEFORE the new one
@@ -307,8 +445,8 @@ jobs:
           # data/cron.lock is excluded on purpose — a PID from this runner is meaningless tomorrow.
           tar -czf /tmp/crawler-state.tar.gz $(find samples -name '*.state.json') data/fx-rates.json
           ASSETS="/tmp/driveindex.sqlite.gz /tmp/crawler-state.tar.gz"
-          # Only the two harvest files that get read back are stored. The rest were deltas and
-          # are already folded into the database.
+          # Only harvest files that a crawler reads back are stored. The rest were deltas and are
+          # already folded into the database.
           if [ -f samples/scraped/bat-partitioned.json ]; then
             gzip -c samples/scraped/bat-partitioned.json > /tmp/bat-partitioned.json.gz
             ASSETS="$ASSETS /tmp/bat-partitioned.json.gz"
@@ -317,9 +455,13 @@ jobs:
             gzip -c samples/scraped/cars-and-bids.json > /tmp/cars-and-bids.json.gz
             ASSETS="$ASSETS /tmp/cars-and-bids.json.gz"
           fi
+          if [ -f samples/scraped/barrettjackson.json ]; then
+            gzip -c samples/scraped/barrettjackson.json > /tmp/barrettjackson.json.gz
+            ASSETS="$ASSETS /tmp/barrettjackson.json.gz"
+          fi
           gh release view state >/dev/null 2>&1 || \
             gh release create state --title "Pipeline state (internal)" \
-              --notes "Working database, crawler resume markers, and the two harvest files crawlers read back. Consumed by .github/workflows/daily.yml - not a download for humans."
+              --notes "Working database, crawler resume markers, and the harvest files crawlers read back. Consumed by the pipeline workflows - not a download for humans."
           gh release upload state $ASSETS --clobber
           ls -la /tmp/*.gz
 
@@ -331,6 +473,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log
-          path: /tmp/build.log
+          name: build-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/build.log
+            /tmp/harvest-summary.log
+            /tmp/pipeline-run-manifest.txt
+            data/cron-history.jsonl
           if-no-files-found: ignore
+          retention-days: 30

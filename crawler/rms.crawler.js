@@ -43,7 +43,10 @@ const HEADERS = { "User-Agent": UA, Accept: "application/json", "Content-Type": 
 const PAGE_SIZE = 200;
 const MAX_PAGE = 49;            // measured: offset 10,000 is the last page that answers
 const DELAY_MS = Number(process.env.DELAY_MS) || 1500;
-const RECHECK_DAYS = 45;        // re-fetch recent auctions; late results are common
+const RECHECK_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || 45; // late results are common
+const DISCOVERY_PAGES = process.env.SCRAPE_MODE === "full"
+  ? MAX_PAGE
+  : Math.max(1, Number(process.env.RMS_RECENT_DISCOVERY_PAGES) || 5);
 
 const OUT = path.join(__dirname, "..", "samples", "scraped", "rms.json");
 
@@ -145,7 +148,7 @@ async function discover(maxPages = MAX_PAGE) {
 }
 
 async function run() {
-  const full = process.argv.includes("--full");
+  const full = process.argv.includes("--full") || process.env.SCRAPE_MODE === "full";
   const maxAuctions = Number(process.argv.find((a) => /^\d+$/.test(a))) || Infinity;
 
   const state = loadJson(STATE, { auctions: {}, updated: null });
@@ -156,7 +159,7 @@ async function run() {
   console.log(`resuming: ${startCount} sales on file, ${Object.keys(state.auctions).length} auctions known\n`);
 
   console.log("discovering auctions...");
-  const codes = await discover();
+  const codes = await discover(DISCOVERY_PAGES);
   for (const [code, name] of codes) {
     if (!state.auctions[code]) state.auctions[code] = { name, complete: false, date: null, lots: 0 };
     else state.auctions[code].name = name;
@@ -168,6 +171,11 @@ async function run() {
 
   for (const [code, meta] of Object.entries(state.auctions)) {
     if (processed >= maxAuctions) break;
+
+    if (!full && meta.date) {
+      const age = (now - new Date(meta.date).getTime()) / 86400000;
+      if (age > RECHECK_DAYS) { skipped++; continue; }
+    }
 
     // Incremental: a finished, settled auction is immutable — do not re-fetch it every night.
     // Recent ones stay in the recheck window because late results are common.

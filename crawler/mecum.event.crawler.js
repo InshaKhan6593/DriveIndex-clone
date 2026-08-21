@@ -107,6 +107,10 @@ const HEADERS = {
 // robots.txt: Crawl-delay: 1. We hold ourselves above the floor for the plain fetches; the
 // browser walk is far slower than this per page already.
 const DELAY_MS = Number(process.env.DELAY_MS) || 1500;
+const RECENT_MODE = process.env.SCRAPE_MODE !== "full";
+const RECENT_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || 45;
+const CURRENT_YEAR = Number(process.env.MECUM_CURRENT_YEAR) || new Date().getUTCFullYear();
+const RECENT_YEAR_RE = new RegExp(`\\b(?:${CURRENT_YEAR}|${CURRENT_YEAR - 1})\\b`);
 
 const SITEMAPS = [1, 2, 3].map((i) => `https://www.mecum.com/sitemaps/auction-sitemap${i}.xml`);
 
@@ -279,10 +283,18 @@ async function run(maxEvents) {
   console.log(`resuming: ${records.size} records, ${Object.keys(state.events).length} events known\n`);
 
   const now = Date.now();
+  const isRecentEvent = (slug, meta) => {
+    if (RECENT_YEAR_RE.test(String(slug))) return true;
+    const date = Date.parse(meta.date || "");
+    if (!Number.isFinite(date)) return false;
+    const age = (now - date) / 86400000;
+    return age >= 0 && age <= RECENT_DAYS;
+  };
   const eligible = Object.entries(state.events)
     .filter(([, m]) => !m.dead)
-    .filter(([, m]) => !m.complete)
-    .filter(([, m]) => (m.attempts || 0) < MAX_ATTEMPTS)
+    .filter(([slug, m]) => !RECENT_MODE || isRecentEvent(slug, m))
+    .filter(([, m]) => !m.complete || (RECENT_MODE && m.complete))
+    .filter(([, m]) => m.complete || (m.attempts || 0) < MAX_ATTEMPTS)
     // Skip events we already know are in the future — no results to collect.
     .filter(([, m]) => !m.date || new Date(m.date).getTime() < now);
 
@@ -292,12 +304,13 @@ async function run(maxEvents) {
   // that had never been touched (137 of them 2012-2021, the whole missing decade) sat behind
   // them. Resuming a genuinely PARTIAL event is still worth doing, so those come second, and
   // ahead of anything already producing.
-  const rank = (m) => {
+  const rank = (slug, m) => {
+    if (RECENT_MODE && isRecentEvent(slug, m)) return 0; // refresh late-posted recent results first
     if (!m.harvestedAt) return 0;                 // never visited — the real gap
     if (m.hitCap || m.lastPage) return 1;         // partial, resumable from a checkpoint
     return 2;                                     // already walked to the end
   };
-  const todo = eligible.sort((a, b) => rank(a[1]) - rank(b[1])).slice(0, maxEvents);
+  const todo = eligible.sort((a, b) => rank(a[0], a[1]) - rank(b[0], b[1])).slice(0, maxEvents);
 
   const fresh = todo.filter(([, m]) => !m.harvestedAt).length;
   console.log(`selected ${todo.length} of ${eligible.length} eligible events (${fresh} never visited)`);

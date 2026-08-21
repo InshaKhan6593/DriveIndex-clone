@@ -43,7 +43,7 @@ const UA = "Mozilla/5.0 (compatible; price-index-research/1.0)";
 const HEADERS = { "User-Agent": UA, Accept: "application/json" };
 
 const DELAY_MS = Number(process.env.DELAY_MS) || 1200;
-const RECHECK_DAYS = 45; // same window RM uses; results can post late after a multi-day sale
+const RECHECK_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || 45; // late results can post after a sale
 
 const OUT = path.join(__dirname, "..", "samples", "scraped", "gooding.json");
 const STATE = path.join(__dirname, "..", "samples", "gooding.state.json");
@@ -102,7 +102,7 @@ async function fetchAuction(slug) {
 }
 
 async function run() {
-  const full = process.argv.includes("--full");
+  const full = process.argv.includes("--full") || process.env.SCRAPE_MODE === "full";
   const maxAuctions = Number(process.argv.find((a) => /^\d+$/.test(a))) || Infinity;
 
   const state = loadJson(STATE, { auctions: {}, updated: null });
@@ -121,6 +121,11 @@ async function run() {
   for (const slug of slugs) {
     if (processed >= maxAuctions) break;
     const meta = state.auctions[slug];
+
+    if (!full && meta.date) {
+      const age = (now - new Date(meta.date).getTime()) / 86400000;
+      if (age > RECHECK_DAYS) { skipped++; continue; }
+    }
 
     if (!full && meta.complete) {
       const age = meta.date ? (now - new Date(meta.date).getTime()) / 86400000 : Infinity;

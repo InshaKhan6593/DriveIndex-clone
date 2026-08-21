@@ -87,6 +87,9 @@ const IDS_TTL_MS = 12 * 60 * 60 * 1000;
 // How long after a sale date to keep re-checking an auction whose lots had not concluded.
 // Same window rms and gooding use — results post late, especially on multi-day sales.
 const RECHECK_DAYS = 45;
+const RECENT_MODE = process.env.SCRAPE_MODE !== "full";
+const RECENT_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || RECHECK_DAYS;
+const RECENT_AUCTIONS = Math.max(1, Number(process.env.BONHAMS_RECENT_AUCTIONS) || 50);
 
 const SITEMAP = "https://www.bonhams.com/sitemap-sale.xml";
 const AUCTION = (id) => `https://cars.bonhams.com/auction/${id}/`;
@@ -189,6 +192,14 @@ async function run() {
     // Truncated: the auction holds cars we never reached.
     if ((e.lots ?? 0) < (e.hits ?? 0) && (e.cars ?? 0) < (e.carsExpected ?? 0)) return true;
 
+    // In recent mode, refresh even a previously complete auction. Bonhams can correct a result
+    // or publish a late status after the first full page walk; the normalized row is upserted.
+    const ends = Date.parse(e.endsAt || "");
+    if (RECENT_MODE && Number.isFinite(ends)) {
+      const age = (Date.now() - ends) / 86400000;
+      if (age >= 0 && age <= RECENT_DAYS) return true;
+    }
+
     // NOT YET CONCLUDED. An auction can be fully paginated and still yield no records because
     // every lot is status NEW — it has not happened yet. Marking that terminal loses the sale
     // permanently once it does: 4 such auctions were already holding 58 car lots, dated
@@ -197,7 +208,6 @@ async function run() {
     // because results post late. An unknown/sentinel date (Bonhams uses 2100-12-31 for "not
     // scheduled") keeps it in the queue, which is the safe direction.
     if ((e.kept ?? 0) < (e.cars ?? 0)) {
-      const ends = Date.parse(e.endsAt || "");
       if (!Number.isFinite(ends)) return true;
       return Date.now() < ends + RECHECK_DAYS * 86400000;
     }
@@ -207,7 +217,21 @@ async function run() {
   // ORDER: repairs before exploration. A re-queued entry is a KNOWN car auction with known
   // missing lots; an unvisited id is a lottery ticket that comes up non-car ~93% of the time.
   // Left in plain id order the repairs sit below 8k unvisited ids and effectively never run.
-  const all = state.ids.filter((id) => needsVisit(state.auctions[id]));
+  let candidateIds = state.ids;
+  if (RECENT_MODE) {
+    // The sitemap is newest-first. Keep a bounded fresh frontier, plus known car auctions whose
+    // closing date is still inside the late-result window; do not continue the old archive scan.
+    const frontier = state.ids.slice(0, RECENT_AUCTIONS);
+    const knownRecent = state.ids.filter((id) => {
+      const e = state.auctions[id];
+      if (!e || e.k !== "cars") return false;
+      const ends = Date.parse(e.endsAt || "");
+      return Number.isFinite(ends) && (Date.now() - ends) / 86400000 >= 0 &&
+        (Date.now() - ends) / 86400000 <= RECENT_DAYS;
+    });
+    candidateIds = [...new Set([...frontier, ...knownRecent])];
+  }
+  const all = candidateIds.filter((id) => needsVisit(state.auctions[id]));
   const repair = all.filter((id) => state.auctions[id] != null);
   const fresh = all.filter((id) => state.auctions[id] == null); // already newest-first
   const todo = [...repair, ...fresh];

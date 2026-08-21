@@ -30,6 +30,8 @@ const { adaptVehiclePage, LOT_ID_RE } = require("./broadarrow-adapt");
 const UA = "Mozilla/5.0 (compatible; price-index-research/1.0)";
 const HEADERS = { "User-Agent": UA };
 const CRAWL_DELAY_MS = 10000; // robots.txt: Crawl-delay: 10 — honored, not worked around
+const RECENT_MODE = process.env.SCRAPE_MODE !== "full";
+const RECENT_LOTS = Math.max(1, Number(process.env.BROADARROW_RECENT_LOTS) || 200);
 
 const SITEMAP = "https://www.broadarrowauctions.com/sitemaps/bagauction/sitemap.xml.gz";
 const PAST_AUCTIONS = "https://www.broadarrowauctions.com/past-auctions";
@@ -97,6 +99,28 @@ async function largestUnfinishedEvent(state) {
   return { event, urls, remaining: byEvent.size };
 }
 
+// The sitemap is newest-first in practice, and event codes carry a year suffix (jc22,
+// monterey26, etc.). Recent mode refreshes the newest event even when its lot ids are already
+// marked done, so a corrected result or a newly posted sale is not frozen out by state.
+async function latestEvent() {
+  const all = await fetchAllSitemapEntries();
+  const byEvent = new Map();
+  all.forEach((entry, index) => {
+    if (!byEvent.has(entry.event)) byEvent.set(entry.event, { urls: [], index });
+    byEvent.get(entry.event).urls.push(entry.url);
+  });
+  const yearOf = (event) => {
+    const m = String(event).match(/(\d{2,4})$/);
+    if (!m) return 0;
+    const year = Number(m[1]);
+    return year < 100 ? 2000 + year : year;
+  };
+  const [event, meta] = [...byEvent.entries()].sort((a, b) =>
+    yearOf(b[0]) - yearOf(a[0]) || a[1].index - b[1].index
+  )[0] || [];
+  return event ? { event, urls: meta.urls.slice(0, RECENT_LOTS), remaining: byEvent.size } : null;
+}
+
 // event/branch name (exact text) -> closing ISO date
 async function resolveEventDates() {
   const r = await fetchText(PAST_AUCTIONS);
@@ -138,8 +162,10 @@ async function run() {
 
   let urls;
   if (eventPrefix === "auto") {
-    console.log("auto mode: finding the event with the most unharvested lots ...");
-    const pick = await largestUnfinishedEvent(state);
+    console.log(RECENT_MODE
+      ? `recent mode: refreshing the newest event (up to ${RECENT_LOTS} lots) ...`
+      : "auto mode: finding the event with the most unharvested lots ...");
+    const pick = RECENT_MODE ? await latestEvent() : await largestUnfinishedEvent(state);
     if (!pick) { console.log("every event in the sitemap is fully harvested — nothing to do"); return; }
     urls = pick.urls;
     console.log(`  -> "${pick.event}" (${urls.length} lots outstanding; ${pick.remaining} events still have work)\n`);
@@ -153,7 +179,7 @@ async function run() {
   let added = 0, addedListings = 0, skipped = 0, undated = 0;
   for (const url of urls) {
     const lotId = (url.match(LOT_ID_RE) || [])[1];
-    if (state.done[lotId]) { continue; }
+    if (state.done[lotId] && !RECENT_MODE) { continue; }
 
     const r = await fetchText(url);
     if (r.http !== 200) {

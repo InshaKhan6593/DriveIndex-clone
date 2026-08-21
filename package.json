@@ -21,6 +21,8 @@
     "api": "node api/server.js",
     "validate": "node validation/split-audit.js && node validation/duplication-audit.js && node validation/null-attribute-splits.js",
     "scrape:bonhams": "node crawler/bonhams.crawler.js",
+    "scrape:bj": "node crawler/barrettjackson.crawler.js",
+    "test:bj": "node crawler/barrettjackson-adapt.test.js",
     "fx": "node fx/fetch-ecb-rates.js"
   },
   "dependencies": {
