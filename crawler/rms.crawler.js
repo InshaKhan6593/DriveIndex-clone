@@ -35,6 +35,7 @@
 const fs = require("fs");
 const path = require("path");
 const { adaptLot } = require("./rms-adapt");
+const { closeListingFromSale, closeListingAsEnded } = require("./listing-lifecycle");
 
 const API = "https://rmsothebys.com/api/search/SearchLots";
 const UA = "Mozilla/5.0 (compatible; price-index-research/1.0)";
@@ -186,7 +187,7 @@ async function run() {
 
     if (!meta.date) meta.date = await resolveAuctionDate(code), await sleep(DELAY_MS);
 
-    let claimed = null, added = 0, undated = 0, asks = 0, notSold = 0;
+    let claimed = null, added = 0, closedListings = 0, undated = 0, asks = 0, notSold = 0;
     for (let page = 0; page <= MAX_PAGE; page++) {
       const r = await search(page, { Auctions: [code] });
       if (r.http !== 200) { claimed = null; break; }
@@ -199,11 +200,25 @@ async function run() {
           const k = `${out.record.source}|${out.record.source_lot_id}`;
           if (!sales.has(k)) added++;
           sales.set(k, out.record);
+          const closed = closeListingFromSale(listings.get(k), out.record);
+          if (closed) { listings.set(k, closed); closedListings++; }
         } else if (out.kind === "listing" && out.record.source_lot_id) {
           listings.set(`${out.record.source}|${out.record.source_lot_id}`, out.record);
           asks++;
         } else if (/no auction date/.test(out.reason || "")) undated++;
-        else notSold++;
+        else {
+          // An older RM asking row can change to a non-asking outcome after the auction closes.
+          // That is a closure signal for the listing table, but never a sale without the adapter's
+          // explicit Sold + valueType=Sold gate.
+          const link = String(it.link || "");
+          const lotId = it.id || (link.match(/\/lots\/([^/?#]+)/) || [])[1] || null;
+          const k = lotId ? `rms|${lotId}` : null;
+          if (k && listings.has(k) && meta.date && /offered without reserve|not sold|withdrawn|bid/i.test(String(it.valueType || ""))) {
+            listings.set(k, closeListingAsEnded(listings.get(k), meta.date, `RM valueType changed to "${it.valueType || "unknown"}"`));
+            closedListings++;
+          }
+          notSold++;
+        }
       }
       if (r.items.length < PAGE_SIZE) break;
       await sleep(DELAY_MS);
@@ -220,7 +235,7 @@ async function run() {
     console.log(
       `${meta.complete ? "DONE " : "PART "} ${code.padEnd(10)} ${String(meta.name).slice(0, 30).padEnd(31)} ` +
       `claimed=${String(claimed ?? "?").padStart(5)} +${String(added).padStart(4)} sales  ` +
-      `asks=${String(asks).padStart(3)} notSold=${String(notSold).padStart(4)}${undated ? `  UNDATED=${undated}` : ""}  ` +
+      `asks=${String(asks).padStart(3)} closed=${String(closedListings).padStart(3)} notSold=${String(notSold).padStart(4)}${undated ? `  UNDATED=${undated}` : ""}  ` +
       `date=${meta.date ? meta.date.slice(0, 10) : "UNRESOLVED"}`
     );
 

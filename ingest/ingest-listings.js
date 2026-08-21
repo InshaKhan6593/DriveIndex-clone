@@ -24,8 +24,10 @@ const LISTINGS_DIR = path.join(__dirname, "..", "samples", "listings");
 function upsertListing(db, carId, rec) {
   const existing = db.prepare("SELECT id, first_seen_at FROM listing WHERE source = ? AND source_lot_id = ?").get(rec.source, rec.source_lot_id);
   const now = rec.fetched_at || new Date().toISOString();
+  const legacyAsking = /asking/i.test(String(rec._extra?.valueType || ""));
+  const isActive = rec.is_active != null ? Boolean(rec.is_active) : legacyAsking;
   const listingType = rec.listing_type || (rec._extra?.estimateLow != null ? "auction" : "classified");
-  const listingStatus = rec.listing_status || (rec.is_active ? "live" : "unknown");
+  const listingStatus = rec.listing_status || (isActive ? "live" : "unknown");
   const priceType = rec.price_type || (rec._extra?.estimateLow != null ? "estimate" : listingType === "auction" ? "current_bid" : "asking");
   if (existing) {
     db.prepare(
@@ -38,7 +40,7 @@ function upsertListing(db, carId, rec) {
          last_seen_at = ? WHERE id = ?`
     ).run(
       rec.url, rec.price, rec.currency || "USD", rec.mileage, rec.vin_raw, rec.color,
-      rec.transmission, rec.tc, rec.image_url, rec.is_active ? 1 : 0,
+      rec.transmission, rec.tc, rec.image_url, isActive ? 1 : 0,
       listingType, listingStatus, priceType, rec.current_bid ?? null, rec.estimate_low ?? null,
       rec.estimate_high ?? null, rec.ends_at ?? null, rec.closed_at ?? null, rec.status_reason ?? null,
       now, existing.id
@@ -55,7 +57,7 @@ function upsertListing(db, carId, rec) {
   ).run(
     newId(), carId, rec.source, rec.source_lot_id, rec.url, rec.price, rec.currency || "USD",
     rec.mileage, rec.vin_raw, rec.color, rec.transmission, rec.tc, rec.image_url,
-    now, now, rec.is_active ? 1 : 0, listingType, listingStatus, priceType,
+    now, now, isActive ? 1 : 0, listingType, listingStatus, priceType,
     rec.current_bid ?? null, rec.estimate_low ?? null, rec.estimate_high ?? null,
     rec.ends_at ?? null, rec.closed_at ?? null, rec.status_reason ?? null
   );

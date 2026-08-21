@@ -112,7 +112,7 @@ async function run() {
   }
   console.log(`  ${urls.length} VDP urls found, harvesting up to ${maxUrls}\n`);
 
-  let added = 0, skipped = 0, processed = 0;
+  let added = 0, closed = 0, skipped = 0, processed = 0;
   for (const url of urls) {
     if (processed >= maxUrls) break;
     if (state.done[url] && !RECENT_MODE) continue;
@@ -131,7 +131,9 @@ async function run() {
       const k = `${out.record.source}|${out.record.source_lot_id}`;
       if (!listings.has(k)) added++;
       listings.set(k, out.record);
-      console.log(`GOT   $${out.record.price.toLocaleString().padStart(10)}  ${out.record.title}`);
+      if (!out.record.is_active) closed++;
+      const price = out.record.price == null ? "no price" : `$${out.record.price.toLocaleString()}`;
+      console.log(`${out.record.is_active ? "GOT  " : "CLOSE"}  ${price.padStart(12)}  ${out.record.title}`);
     } else {
       skipped++;
       console.log(`SKIP  ${out.reason}  ${url}`);
@@ -144,7 +146,7 @@ async function run() {
     await sleep(DELAY_MS);
   }
 
-  console.log(`\n${listings.size} listings (+${added} this run), ${skipped} skipped this run`);
+  console.log(`\n${listings.size} listings (+${added} this run), ${closed} explicitly closed, ${skipped} skipped this run`);
   console.log(`Wrote ${OUT}`);
 }
 

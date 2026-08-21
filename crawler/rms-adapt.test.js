@@ -35,6 +35,9 @@ t("a Sold lot becomes a sale", () => {
 t("an Asking row becomes a LISTING, never a sale", () => {
   const r = adaptLot(lot({ valueType: "Asking", sold: false, value: "$3,300,000 USD" }), DATE);
   assert.strictEqual(r.kind, "listing", `an ask leaked in as ${r.kind}`);
+  assert.strictEqual(r.record.is_active, true);
+  assert.strictEqual(r.record.listing_status, "live");
+  assert.strictEqual(r.record.price_type, "asking");
 });
 
 t("sold:true with a non-Sold valueType is still not a sale", () => {

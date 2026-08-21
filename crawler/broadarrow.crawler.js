@@ -26,6 +26,7 @@ const fs = require("fs");
 const path = require("path");
 const zlib = require("zlib");
 const { adaptVehiclePage, LOT_ID_RE } = require("./broadarrow-adapt");
+const { closeListingFromSale, closeListingAsEnded } = require("./listing-lifecycle");
 
 const UA = "Mozilla/5.0 (compatible; price-index-research/1.0)";
 const HEADERS = { "User-Agent": UA };
@@ -176,7 +177,7 @@ async function run() {
     if (!urls.length) { console.log("nothing to do — check the event prefix"); return; }
   }
 
-  let added = 0, addedListings = 0, skipped = 0, undated = 0;
+  let added = 0, addedListings = 0, closedListings = 0, skipped = 0, undated = 0;
   for (const url of urls) {
     const lotId = (url.match(LOT_ID_RE) || [])[1];
     if (state.done[lotId] && !RECENT_MODE) { continue; }
@@ -196,6 +197,8 @@ async function run() {
       const k = `${out.record.source}|${out.record.source_lot_id}`;
       if (!sales.has(k)) added++;
       sales.set(k, out.record);
+      const closed = closeListingFromSale(listings.get(k), out.record);
+      if (closed) { listings.set(k, closed); closedListings++; }
       console.log(`SALE  ${lotId.padEnd(10)} $${out.record.price.toLocaleString().padStart(11)}  ${out.record.title}`);
     } else if (out.kind === "listing") {
       const k = `${out.record.source}|${out.record.source_lot_id}`;
@@ -203,6 +206,14 @@ async function run() {
       listings.set(k, out.record);
       console.log(`LIST  ${lotId.padEnd(10)} $${out.record.price.toLocaleString().padStart(11)}  ${out.record.title}`);
     } else {
+      // A known closed event can leave a previous estimate page with no price-row once the lot
+      // has ended without a published hammer price. Close that old listing, but never invent a
+      // sale from the absence of a price.
+      const existing = listings.get(`broadarrow|${lotId}`);
+      if (existing && soldAt && /no price-row|no price found/i.test(out.reason || "")) {
+        listings.set(`broadarrow|${lotId}`, closeListingAsEnded(existing, soldAt, out.reason));
+        closedListings++;
+      }
       if (/no auction date/.test(out.reason)) undated++;
       skipped++;
       console.log(`SKIP  ${lotId.padEnd(10)} ${out.reason}`);
@@ -217,7 +228,7 @@ async function run() {
     await sleep(CRAWL_DELAY_MS);
   }
 
-  console.log(`\n${sales.size} sales (+${added} this run), ${listings.size} listings (+${addedListings} this run), ${skipped} skipped (${undated} undated)`);
+  console.log(`\n${sales.size} sales (+${added} this run), ${listings.size} listings (+${addedListings} this run), ${closedListings} listings closed, ${skipped} skipped (${undated} undated)`);
   console.log(`Wrote ${OUT} and ${LISTINGS_OUT}`);
 }
 

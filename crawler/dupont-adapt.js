@@ -7,10 +7,10 @@
 // they're server-rendered (Next.js App Router RSC streaming), so the real listing data is
 // already sitting in the plain HTML response, no JS execution or API call required.
 //
-// ⚠️ THIS IS A LISTING SOURCE, NOT A SALE SOURCE. Every record carries `isSold: false` — these
-// are asking prices from dealer inventory, never auction results. Populates `listing`, never
-// `sale` (ground truth's own defect #5/§3 note: DuPont mixes asks into "auction" data upstream;
-// this pipeline does not reproduce that).
+// ⚠️ THIS IS A LISTING SOURCE, NOT A SALE SOURCE. Asking prices from dealer inventory populate
+// `listing`, never `sale`. When the VDP explicitly reports isSold=true, that signal closes the
+// existing listing row; it still does NOT fabricate a sale because DuPont is not the auction
+// result source (ground truth's own defect #5/§3 note).
 "use strict";
 
 // The RSC stream backslash-escapes nested JSON (`\"listingData\":{...}`), and the object itself
@@ -48,15 +48,47 @@ function adaptVdpPage(html, url) {
   const data = extractListingData(html);
   if (!data) return { kind: "skip", reason: "no listingData found on page" };
 
-  if (data.isSold) return { kind: "skip", reason: "marked sold — belongs to whoever ran the actual auction, not here" };
-
   const title = `${data.year || ""} ${data.make || ""} ${data.model || ""}`.replace(/\s+/g, " ").trim();
   if (!title) return { kind: "skip", reason: "no title" };
 
-  const price = Number(data.price);
-  if (!Number.isFinite(price) || price <= 0) return { kind: "skip", reason: "no price posted (call for price / not disclosed)" };
-
   if (!data.listingId) return { kind: "skip", reason: "no stable lot id" };
+
+  const sold = data.isSold === true || /^(?:true|sold)$/i.test(String(data.isSold || ""));
+  const price = Number(data.price);
+  const hasPrice = Number.isFinite(price) && price > 0;
+  if (sold) {
+    return {
+      kind: "listing",
+      record: {
+        source: "dupont",
+        source_lot_id: String(data.listingId),
+        url,
+        title,
+        price: hasPrice ? price : null,
+        currency: "USD",
+        mileage: Number.isFinite(Number(data.mileage)) ? Number(data.mileage) : null,
+        vin_raw: isPlaceholderVin(data.vin) ? null : data.vin,
+        color: null,
+        transmission: null,
+        tc: null,
+        image_url: null,
+        is_active: false,
+        listing_type: "classified",
+        listing_status: "sold",
+        price_type: "sold",
+        current_bid: null,
+        estimate_low: null,
+        estimate_high: null,
+        ends_at: null,
+        closed_at: data.soldAt || data.soldDate || null,
+        status_reason: "DuPont VDP explicitly reported isSold=true",
+        fetched_at: new Date().toISOString(),
+        _extra: { isSold: true, sourceStatus: data.status || null },
+      },
+    };
+  }
+
+  if (!hasPrice) return { kind: "skip", reason: "no price posted (call for price / not disclosed)" };
 
   return {
     kind: "listing",
@@ -74,6 +106,15 @@ function adaptVdpPage(html, url) {
       tc: null,
       image_url: null,
       is_active: true,
+      listing_type: "classified",
+      listing_status: "live",
+      price_type: "asking",
+      current_bid: null,
+      estimate_low: null,
+      estimate_high: null,
+      ends_at: null,
+      closed_at: null,
+      status_reason: null,
       fetched_at: new Date().toISOString(),
       _extra: {
         dealerId: data.dealerId || null,
@@ -82,6 +123,7 @@ function adaptVdpPage(html, url) {
         state: data.state || null,
         isPromoted: !!data.isPromoted,
         priceStatus: data.priceStatus ?? null,
+        isSold: false,
       },
     },
   };

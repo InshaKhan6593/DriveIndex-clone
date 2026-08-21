@@ -119,6 +119,7 @@ export function ListingsTable({ listings }: { listings: Listing[] }) {
             <TableCell className="tabular-nums text-muted-foreground">{l.mileage != null ? `${l.mileage.toLocaleString()} mi` : "—"}</TableCell>
             <TableCell className="capitalize text-muted-foreground">
               <div>{l.url ? <a href={l.url} target="_blank" rel="noopener noreferrer" className="hover:underline">{l.source}</a> : (l.source ?? "—")}</div>
+              {l.url && <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-xs normal-case text-primary hover:underline">View listing ↗</a>}
               <div className="text-xs normal-case">{l.listingType} · {l.listingStatus.replaceAll("_", " ")}</div>
               {l.endsAt && <div className="text-xs normal-case">Ends {new Date(l.endsAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</div>}
             </TableCell>
