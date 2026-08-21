@@ -73,26 +73,80 @@ if (hasPrev) {
 // so it is replayed rather than duplicated here — CREATE TABLE IF NOT EXISTS makes it a no-op
 // afterwards. Statements are split on semicolons at line ends to keep CHECK constraints intact.
 const schema = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
+const schemaStatements = schema.split(/;\s*\n/).map((stmt) => {
+  // The first schema statement is preceded by documentation comments. Strip full-line SQL
+  // comments before checking whether the chunk is empty, otherwise CREATE TABLE car is skipped.
+  return stmt.split(/\r?\n/).filter((line) => !line.trim().startsWith("--")).join("\n").trim();
+}).filter(Boolean);
+
+// CREATE TABLE IF NOT EXISTS only creates a missing table; it does not retrofit columns onto an
+// existing Turso table. Keep the hosted schema additive, just like db/client.js does for the local
+// working database. This matters especially for the listing lifecycle fields: the local snapshot
+// can contain them while an older remote listing table cannot accept the diff rows yet.
+const REMOTE_ADDITIVE_MIGRATIONS = [
+  ["listing", "source_lot_id", "TEXT"],
+  ["listing", "listing_type", "TEXT"],
+  ["listing", "listing_status", "TEXT"],
+  ["listing", "price_type", "TEXT"],
+  ["listing", "current_bid", "INTEGER"],
+  ["listing", "estimate_low", "INTEGER"],
+  ["listing", "estimate_high", "INTEGER"],
+  ["listing", "ends_at", "TEXT"],
+  ["listing", "closed_at", "TEXT"],
+  ["listing", "status_reason", "TEXT"],
+  ["car_valuation", "trend_se", "REAL"],
+  ["car_valuation", "trend_lcb", "REAL"],
+  ["car_valuation", "trend_score", "REAL"],
+  ["car_valuation", "signal_scope", "TEXT"],
+  ["car_valuation", "scope_from", "INTEGER"],
+  ["car_valuation", "scope_to", "INTEGER"],
+  ["car_valuation", "scope_n", "INTEGER"],
+  ["car_resolution_queue", "kind", "TEXT NOT NULL DEFAULT 'sale'"],
+];
+
+async function migrateRemote(remote) {
+  for (const [table, column, definition] of REMOTE_ADDITIVE_MIGRATIONS) {
+    try {
+      await remote.execute(`ALTER TABLE "${table}" ADD COLUMN "${column}" ${definition}`);
+      console.log(`remote schema: added ${table}.${column}`);
+    } catch (err) {
+      if (!/already exists|duplicate column|duplicate/i.test(String(err.message))) throw err;
+    }
+  }
+
+  // Existing queue rows predate the kind column. Listings can be identified safely from their
+  // normalized JSON because they do not carry sold_at; preserve the local migration's backfill.
+  try {
+    await remote.execute(`UPDATE "car_resolution_queue" SET "kind" = 'listing'
+      WHERE json_extract("raw_record_json", '$.sold_at') IS NULL`);
+  } catch (err) {
+    if (!/no such column|no such table/i.test(String(err.message))) throw err;
+  }
+}
+
+async function applySchemaStatements(remote, statements) {
+  for (const s of statements) {
+    try {
+      await remote.execute(s + ";");
+    } catch (err) {
+      // A generated column, table, or index that already exists is expected on every run after
+      // the first. Additive migrations above handle columns that CREATE TABLE cannot retrofit.
+      if (!/already exists|duplicate/i.test(String(err.message))) {
+        console.error(`schema statement failed: ${s.slice(0, 80)}...`);
+        throw err;
+      }
+    }
+  }
+}
 
 async function loadRemote() {
 const remote = createClient({ url: URL, authToken: TOKEN });
 
-for (const stmt of schema.split(/;\s*\n/)) {
-  // The first schema statement is preceded by documentation comments. Strip full-line SQL
-  // comments before checking whether the chunk is empty, otherwise CREATE TABLE car is skipped
-  // and the following index fails with "no such table: main.car" on a fresh Turso database.
-  const s = stmt.split(/\r?\n/).filter((line) => !line.trim().startsWith("--")).join("\n").trim();
-  if (!s) continue;
-  try {
-    await remote.execute(s + ";");
-  } catch (err) {
-    // A generated column or an index that already exists is expected on every run after the first.
-    if (!/already exists|duplicate/i.test(String(err.message))) {
-      console.error(`schema statement failed: ${s.slice(0, 80)}...`);
-      throw err;
-    }
-  }
-}
+// Tables first: an older remote listing table must exist before its additive columns can be
+// migrated, and indexes must wait until those columns exist.
+await applySchemaStatements(remote, schemaStatements.filter((s) => /^CREATE TABLE IF NOT EXISTS\b/i.test(s)));
+await migrateRemote(remote);
+await applySchemaStatements(remote, schemaStatements.filter((s) => !/^CREATE TABLE IF NOT EXISTS\b/i.test(s)));
 
 // A previous local snapshot is only a valid diff base when the remote already contains that
 // snapshot. A newly-created or partially initialized Turso database must receive the full
