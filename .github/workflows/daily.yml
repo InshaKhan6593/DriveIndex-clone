@@ -319,7 +319,7 @@ jobs:
         with:
           pattern: harvest-*
           merge-multiple: true
-          path: .
+          path: samples
         continue-on-error: true
 
       - name: Show what arrived
