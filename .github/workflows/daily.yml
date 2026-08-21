@@ -280,8 +280,35 @@ jobs:
         if: always() && matrix.source == 'hagerty'
         run: node validation/hagerty-format.js
 
+      - name: Stage updated source state
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p samples/staging/state
+          find samples/staging/state -maxdepth 1 -type f -name '*.state.json' -delete
+          case "${{ matrix.source }}" in
+            bat) STATE_FILES=(samples/scraped/bat-partitioned.state.json samples/scraped/bat-detail.state.json) ;;
+            mecum) STATE_FILES=(samples/mecum.state.json) ;;
+            rms) STATE_FILES=(samples/rms.state.json) ;;
+            good) STATE_FILES=(samples/gooding.state.json) ;;
+            broadarrow) STATE_FILES=(samples/broadarrow.state.json) ;;
+            dupont) STATE_FILES=(samples/dupont.state.json) ;;
+            bonhams) STATE_FILES=(samples/bonhams.state.json) ;;
+            bj) STATE_FILES=(samples/barrettjackson.state.json) ;;
+            hagerty) STATE_FILES=(samples/hagerty.state.json) ;;
+            classic) STATE_FILES=(samples/classic.state.json) ;;
+            *) STATE_FILES=() ;;
+          esac
+          for state_file in "${STATE_FILES[@]}"; do
+            if [ -f "$state_file" ]; then
+              cp "$state_file" "samples/staging/state/$(basename "$state_file")"
+              echo "staged $(basename "$state_file")"
+            fi
+          done
+
       # Everything this source produced, handed to the build job. Harvest files are deltas for
-      # most sources and the full file for bat/cab; either way ingest is idempotent.
+      # most sources and the full file for bat/cab; state markers are staged per source so the
+      # build can merge them without one matrix job overwriting another.
       - name: Upload harvest and markers
         if: always()
         uses: actions/upload-artifact@v4
@@ -290,6 +317,7 @@ jobs:
           path: |
             samples/scraped/*.json
             samples/listings/*.json
+            samples/staging/state/*.state.json
           if-no-files-found: ignore
           retention-days: 3
 
@@ -369,6 +397,21 @@ jobs:
             ls -la samples/scraped/ samples/listings/ 2>/dev/null || true
             node .github/scripts/summarise-harvest.js || true
           } | tee /tmp/harvest-summary.log >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Merge updated scraper state markers
+        run: |
+          set -euo pipefail
+          mkdir -p samples/scraped
+          shopt -s nullglob
+          for state_file in samples/staging/state/*.state.json; do
+            name="$(basename "$state_file")"
+            case "$name" in
+              bat-partitioned.state.json|bat-detail.state.json) destination="samples/scraped/$name" ;;
+              *) destination="samples/$name" ;;
+            esac
+            cp "$state_file" "$destination"
+            echo "merged $name -> $destination"
+          done
 
       - name: Ingest and recompute
         run: |
