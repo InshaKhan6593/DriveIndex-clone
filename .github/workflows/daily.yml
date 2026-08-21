@@ -203,8 +203,12 @@ jobs:
           else
             ONLY="scrape:${{ matrix.source }}"
           fi
+          # GitHub starts bash with -e. Disable it around this pipeline so cron.js exit 1 can be
+          # classified as PARTIAL below instead of aborting before PIPESTATUS is captured.
+          set +e
           node jobs/cron.js --only="$ONLY" --deadline-minutes="$DEADLINE" 2>&1 | tee /tmp/scrape.log
           code=${PIPESTATUS[0]}
+          set -e
           FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           {
             echo "source=${{ matrix.source }}"
@@ -218,6 +222,7 @@ jobs:
           # cron.js: 0 clean, 1 an optional source failed, 2 the pipeline itself failed. A source
           # being unreachable is a normal day, so only 2 fails this job.
           if [ "$code" -ge 2 ]; then exit 1; fi
+          exit 0
 
       - name: Write scraper diagnostics
         if: always()
@@ -328,8 +333,10 @@ jobs:
       - name: Ingest and recompute
         run: |
           set -uo pipefail
+          set +e
           node jobs/cron.js --only=fx,ingest,ingest:listings,compute 2>&1 | tee /tmp/build.log
           code=${PIPESTATUS[0]}
+          set -e
           # Here a failure IS fatal: ingest and compute are required stages, and publishing a
           # half-built catalogue is worse than publishing nothing.
           if [ "$code" -ge 2 ]; then exit 1; fi
