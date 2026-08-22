@@ -108,6 +108,7 @@ const RECENT_MODE = process.env.SCRAPE_MODE !== "full";
 const RECENT_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || 45;
 const CURRENT_YEAR = Number(process.env.MECUM_CURRENT_YEAR) || new Date().getUTCFullYear();
 const RECENT_YEAR_RE = new RegExp(`\\b(?:${CURRENT_YEAR}|${CURRENT_YEAR - 1})\\b`);
+const CURRENT_YEAR_RE = new RegExp(`\\b${CURRENT_YEAR}\\b`);
 
 const SITEMAPS = [1, 2, 3].map((i) => `https://www.mecum.com/sitemaps/auction-sitemap${i}.xml`);
 const RECENT_ARCHIVE_PAGES = [
@@ -340,17 +341,22 @@ async function run(maxEvents) {
     // Skip events we already know are in the future — no results to collect.
     .filter(([, m]) => !m.date || new Date(m.date).getTime() < now);
 
-  // UNVISITED EVENTS FIRST. Selection used to run in plain insertion order, which meant the
-  // events harvested earliest were also the first re-offered — measured: a 6-event run spent
-  // its entire budget re-walking monterey-2023 for 251 pages and +0 new sales, while 172 events
-  // that had never been touched (137 of them 2012-2021, the whole missing decade) sat behind
-  // them. Resuming a genuinely PARTIAL event is still worth doing, so those come second, and
-  // ahead of anything already producing.
+  // UNVISITED EVENTS FIRST. Selection used to give every current/previous-year event the same
+  // rank, so insertion order won: old 2025 events were refreshed before the newly discovered
+  // 2026 events appended by archive discovery. A run could therefore spend its entire budget
+  // re-walking already harvested sales while the current-year backlog stayed at zero attempts.
+  // Within the unvisited work, current-year events come first, then other recent events. A
+  // genuinely PARTIAL event follows them, ahead of already-complete refreshes.
   const rank = (slug, m) => {
-    if (RECENT_MODE && isRecentEvent(slug, m)) return 0; // refresh late-posted recent results first
-    if (!m.harvestedAt) return 0;                 // never visited — the real gap
-    if (m.hitCap || m.lastPage) return 1;         // partial, resumable from a checkpoint
-    return 2;                                     // already walked to the end
+    const unvisited = !m.harvestedAt;
+    const currentYear = CURRENT_YEAR_RE.test(String(slug));
+    if (unvisited && currentYear) return 0;      // newly discovered current-year gap
+    if (unvisited && RECENT_MODE && isRecentEvent(slug, m)) return 1; // other recent gap
+    if (unvisited) return 2;                     // historical gap
+    if (m.hitCap || m.lastPage) return 3;        // partial, resumable from a checkpoint
+    if (RECENT_MODE && currentYear) return 4;   // refresh current-year results
+    if (RECENT_MODE && isRecentEvent(slug, m)) return 5; // refresh late-posted results
+    return 6;                                    // already walked to the end
   };
   const todo = eligible.sort((a, b) => rank(a[0], a[1]) - rank(b[0], b[1])).slice(0, maxEvents);
 
