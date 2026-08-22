@@ -252,7 +252,10 @@ export async function searchGarageCars(q: string): Promise<{
   results: { id: string; year: number; make: string; model: string; current_value: number | null; sales_count: number }[];
 }> {
   const res = await fetch(`/api/catalogue?q=${encodeURIComponent(q)}`, { cache: "no-store" });
-  if (!res.ok) return { results: [] };
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Catalogue search error ${res.status}`);
+  }
   return res.json();
 }
 

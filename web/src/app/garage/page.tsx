@@ -204,14 +204,28 @@ function AddVehicle({ onAdd }: { onAdd: (input: Record<string, unknown>) => Prom
   const [results, setResults] = useState<{ id: string; year: number; make: string; model: string; current_value: number | null; sales_count: number }[]>([]);
   const [selected, setSelected] = useState<{ id: string; year: number; make: string; model: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [searching, setSearching] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   async function search(event: FormEvent) {
     event.preventDefault();
-    if (query.trim().length < 2) return;
+    if (query.trim().length < 2) {
+      setResults([]);
+      setMessage("Enter at least 2 characters to search.");
+      return;
+    }
     setMessage(null);
-    const response = await searchGarageCars(query.trim());
-    setResults(response.results);
+    setSearching(true);
+    try {
+      const response = await searchGarageCars(query.trim());
+      setResults(response.results);
+      if (!response.results.length) setMessage("No indexed cars matched that search.");
+    } catch (err) {
+      setResults([]);
+      setMessage(err instanceof Error ? err.message : "Unable to search the catalogue");
+    } finally {
+      setSearching(false);
+    }
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -250,9 +264,9 @@ function AddVehicle({ onAdd }: { onAdd: (input: Record<string, unknown>) => Prom
         <form onSubmit={search} className="flex gap-2">
           <div className="relative min-w-0 flex-1">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search 2019 Porsche 911 GT3" className="pl-8" />
+            <Input value={query} onChange={(event) => { setQuery(event.target.value); setMessage(null); }} placeholder="Search 2019 Porsche 911 GT3" className="pl-8" />
           </div>
-          <Button type="submit" variant="outline">Search</Button>
+          <Button type="submit" variant="outline" disabled={searching}>{searching ? "Searching…" : "Search"}</Button>
         </form>
 
         {!selected && results.length > 0 && (
@@ -265,6 +279,8 @@ function AddVehicle({ onAdd }: { onAdd: (input: Record<string, unknown>) => Prom
             ))}
           </div>
         )}
+
+        {!selected && message && <p className="text-sm text-muted-foreground">{message}</p>}
 
         {selected && (
           <form onSubmit={submit} className="space-y-3 rounded-lg border bg-muted/20 p-3">

@@ -350,13 +350,29 @@ app.get("/api/compare", (req, res) => {
 app.get("/api/search", (req, res) => {
   const q = String(req.query.q || "").trim();
   if (q.length < 2) return res.json({ results: [] });
+  // Search is used by Garage as well as Compare. The Garage placeholder deliberately includes
+  // a year ("2019 Porsche 911 GT3"), so treating the whole input as one phrase made every
+  // year-qualified search return nothing: the year is not part of make/model. Parse year as an
+  // exact filter and require each remaining word to occur in either make or model.
+  const tokens = q.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(/\s+/).filter(Boolean);
+  const where = ["v.current_value IS NOT NULL"];
+  const params = [];
+  for (const token of tokens) {
+    if (/^(?:19|20)\d{2}$/.test(token)) {
+      where.push("c.year = ?");
+      params.push(Number(token));
+    } else {
+      where.push("(lower(c.make) LIKE ? OR lower(c.model) LIKE ?)");
+      const like = `%${token}%`;
+      params.push(like, like);
+    }
+  }
   const rows = db.prepare(
     `SELECT c.id, c.year, c.make, c.model, v.current_value, v.sales_count
      FROM car c JOIN car_valuation v ON v.car_id = c.id
-     WHERE (lower(c.make) || ' ' || lower(c.model)) LIKE lower(?)
-       AND v.current_value IS NOT NULL
+     WHERE ${where.join(" AND ")}
      ORDER BY v.sales_count DESC LIMIT 12`
-  ).all(`%${q}%`);
+  ).all(...params);
   res.json({ results: rows });
 });
 
