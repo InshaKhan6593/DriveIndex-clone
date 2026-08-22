@@ -142,6 +142,34 @@ async function applySchemaStatements(remote, statements) {
   }
 }
 
+// A full market reset must leave user-owned Garage rows intact. garage_vehicle.car_id points at
+// car, so deleting every car first violates the foreign key and would make a recoverable market
+// snapshot failure look like a Garage-data failure. Keep any car referenced by Garage; it can be
+// refreshed by the snapshot when it is still present in the market catalogue.
+async function resetMarketTables(remote) {
+  const protectedRows = await remote.execute(
+    `SELECT DISTINCT car_id FROM garage_vehicle WHERE car_id IS NOT NULL`
+  );
+  const protectedCarIds = new Set(protectedRows.rows.map((row) => String(row.car_id)));
+  await remote.batch([
+    { sql: `DELETE FROM "car_resolution_queue"`, args: [] },
+    { sql: `DELETE FROM "listing"`, args: [] },
+    { sql: `DELETE FROM "sale"`, args: [] },
+    { sql: `DELETE FROM "car_valuation"`, args: [] },
+    {
+      sql: `DELETE FROM "car"
+            WHERE NOT EXISTS (
+              SELECT 1 FROM "garage_vehicle" g WHERE g.car_id = car.id
+            )`,
+      args: [],
+    },
+  ], "write");
+  if (protectedCarIds.size) {
+    console.log(`preserved ${protectedCarIds.size} Garage-linked car rows during market reset`);
+  }
+  return protectedCarIds;
+}
+
 async function loadRemote() {
 const remote = createClient({ url: URL, authToken: TOKEN });
 
@@ -155,15 +183,20 @@ await applySchemaStatements(remote, schemaStatements.filter((s) => !/^CREATE TAB
 // snapshot. A newly-created or partially initialized Turso database must receive the full
 // serving snapshot, even though data-latest exists from before Turso was configured.
 let usePreviousSnapshot = Boolean(hasPrev);
+let preservedGarageCarIds = new Set();
 if (usePreviousSnapshot) {
   const remoteCounts = await Promise.all(TABLES.map(async (table) => {
     const result = await remote.execute(`SELECT COUNT(*) n FROM "${table}"`);
     return Number(result.rows[0].n);
   }));
   const previousCounts = TABLES.map((table) => src.prepare(`SELECT COUNT(*) n FROM prev."${table}"`).get().n);
-  if (remoteCounts.some((count, i) => count !== previousCounts[i])) {
+  const currentCounts = TABLES.map((table) => src.prepare(`SELECT COUNT(*) n FROM main."${table}"`).get().n);
+  const matchesCurrent = remoteCounts.every((count, i) => count === currentCounts[i]);
+  if (matchesCurrent) {
+    console.log(`remote counts already match the new snapshot ${currentCounts.join(",")}; applying the diff without resetting`);
+  } else if (remoteCounts.some((count, i) => count !== previousCounts[i])) {
     console.log(`remote counts ${remoteCounts.join(",")} do not match previous snapshot ${previousCounts.join(",")} - resetting remote tables and pushing a full snapshot`);
-    for (const table of [...TABLES].reverse()) await remote.execute(`DELETE FROM "${table}"`);
+    preservedGarageCarIds = await resetMarketTables(remote);
     usePreviousSnapshot = false;
   }
 }
@@ -249,8 +282,12 @@ for (const table of TABLES) {
   const BATCH = 250;
   for (let i = 0; i < changed.length; i += BATCH) {
     const slice = changed.slice(i, i + BATCH);
+    const insertSql = table === "car"
+      ? `INSERT INTO "${table}" (${colList}) VALUES (${cols.map(() => "?").join(", ")})
+         ON CONFLICT("id") DO UPDATE SET ${cols.filter((c) => c !== "id").map((c) => `"${c}" = excluded."${c}"`).join(", ")}`
+      : `INSERT OR REPLACE INTO "${table}" (${colList}) VALUES (${cols.map(() => "?").join(", ")})`;
     const statements = slice.map((row) => ({
-      sql: `INSERT OR REPLACE INTO "${table}" (${colList}) VALUES (${cols.map(() => "?").join(", ")})`,
+      sql: insertSql,
       args: cols.map((c) => row[c] ?? null),
     }));
     try {
@@ -290,6 +327,13 @@ for (const job of pendingDeletes.reverse()) {
 const remoteResult = await remote.execute("SELECT COUNT(*) n FROM car");
 const remoteCars = Number(remoteResult.rows[0].n);
 const localCars = src.prepare("SELECT COUNT(*) n FROM main.car").get().n;
+let expectedCars = localCars;
+if (preservedGarageCarIds.size) {
+  const localCarIds = new Set(src.prepare("SELECT id FROM main.car").all().map((row) => String(row.id)));
+  const preservedExtras = [...preservedGarageCarIds].filter((id) => !localCarIds.has(id)).length;
+  expectedCars += preservedExtras;
+  if (preservedExtras) console.log(`expected remote car count includes ${preservedExtras} preserved Garage-only car rows`);
+}
 
 console.log(`\ntotal: ${totalWrites} rows written, ${totalDeletes} deleted`);
 console.log(`monthly pace if repeated daily: ${((totalWrites + totalDeletes) * 30 / 1e6).toFixed(1)}M writes (free cap: 10M)`);
@@ -297,8 +341,8 @@ console.log(`cars — local ${localCars}, remote ${remoteCars}`);
 
 // The whole point of the exercise is that the remote copy equals the local one. Saying so out
 // loud turns a silent partial load into a failed step.
-if (remoteCars !== localCars) {
-  console.error(`\nMISMATCH: remote has ${remoteCars} cars, snapshot has ${localCars}.`);
+if (remoteCars !== expectedCars) {
+  console.error(`\nMISMATCH: remote has ${remoteCars} cars, expected ${expectedCars} (${localCars} in snapshot plus preserved Garage rows).`);
   console.error("The load did not fully apply. Re-run; the upsert is idempotent so this is safe.");
   process.exit(1);
 }

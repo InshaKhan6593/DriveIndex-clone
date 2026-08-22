@@ -333,36 +333,36 @@ function VehicleCard({ vehicle, onArchive, onUpdate }: { vehicle: GarageVehicle;
   }
 
   return (
-    <Card className="overflow-hidden">
-      <div className="flex gap-3 border-b p-4">
-        <div className="relative size-20 shrink-0 overflow-hidden rounded-lg bg-muted">
-          {vehicle.car.imageUrl ? <Image src={vehicle.car.imageUrl} alt="" fill sizes="80px" className="object-cover" unoptimized /> : <div className="flex h-full items-center justify-center"><CarFront className="size-7 text-muted-foreground/50" /></div>}
+    <Card size="sm" className="overflow-hidden">
+      <div className="flex gap-2.5 border-b p-3">
+        <div className="relative size-16 shrink-0 overflow-hidden rounded-md bg-muted">
+          {vehicle.car.imageUrl ? <Image src={vehicle.car.imageUrl} alt="" fill sizes="64px" className="object-cover" unoptimized /> : <div className="flex h-full items-center justify-center"><CarFront className="size-6 text-muted-foreground/50" /></div>}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <Link href={`/cars/${vehicle.carId}`} className="block truncate text-base font-semibold hover:underline">{title}</Link>
-              {vehicle.nickname && <div className="truncate text-sm text-muted-foreground">{vehicle.nickname}</div>}
+              <Link href={`/cars/${vehicle.carId}`} className="block truncate text-sm font-semibold hover:underline">{title}</Link>
+              {vehicle.nickname && <div className="truncate text-xs text-muted-foreground">{vehicle.nickname}</div>}
             </div>
             {vehicle.status === "sold" && <Badge variant="outline">Sold</Badge>}
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
             {vehicle.valuation.signal && <Badge variant="secondary">{vehicle.valuation.signal}</Badge>}
             <span>{vehicle.currentMileage != null ? `${vehicle.currentMileage.toLocaleString()} mi` : "Mileage not set"}</span>
           </div>
         </div>
       </div>
-      <CardContent className="space-y-4 pt-4">
-        <div className="grid grid-cols-2 gap-4">
-          <div><div className="text-xs uppercase tracking-wide text-muted-foreground">Market value</div><div className="mt-1 text-xl font-semibold tabular-nums">{money(vehicle.marketValue)}</div></div>
-          <div><div className="text-xs uppercase tracking-wide text-muted-foreground">Your P&amp;L</div><div className={`mt-1 text-xl font-semibold tabular-nums ${!positive ? "text-destructive" : ""}`}>{signedMoney(vehicle.gainLoss)}</div><div className="text-xs text-muted-foreground">{pct(vehicle.returnPct)}</div></div>
+      <CardContent className="space-y-3 pt-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div><div className="text-[11px] uppercase tracking-wide text-muted-foreground">Market value</div><div className="mt-0.5 text-lg font-semibold tabular-nums">{money(vehicle.marketValue)}</div></div>
+          <div><div className="text-[11px] uppercase tracking-wide text-muted-foreground">Your P&amp;L</div><div className={`mt-0.5 text-lg font-semibold tabular-nums ${!positive ? "text-destructive" : ""}`}>{signedMoney(vehicle.gainLoss)}</div><div className="text-[11px] text-muted-foreground">{pct(vehicle.returnPct)}</div></div>
         </div>
 
-        <div className="flex items-end justify-between gap-3">
+        <div className="flex min-h-9 items-end justify-between gap-2">
           <div className="min-w-0 flex-1">
-            {vehicle.history.length > 1 ? <Sparkline points={vehicle.history.map((point) => point.marketValue)} /> : <div className="text-xs text-muted-foreground">Daily history will appear after the next snapshot.</div>}
+            {vehicle.history.length > 1 ? <Sparkline points={vehicle.history.map((point) => point.marketValue)} /> : <div className="text-[11px] leading-tight text-muted-foreground">Daily history appears after the next snapshot.</div>}
           </div>
-          <div className={`flex shrink-0 items-center gap-1 text-xs tabular-nums ${vehicle.dayChange != null && vehicle.dayChange < 0 ? "text-destructive" : "text-muted-foreground"}`}>
+          <div className={`flex shrink-0 items-center gap-1 text-[11px] tabular-nums ${vehicle.dayChange != null && vehicle.dayChange < 0 ? "text-destructive" : "text-muted-foreground"}`}>
             {vehicle.dayChange != null && vehicle.dayChange >= 0 ? <TrendingUp className="size-3" /> : vehicle.dayChange != null ? <TrendingDown className="size-3" /> : null}
             {signedMoney(vehicle.dayChange)} today
           </div>
@@ -380,7 +380,7 @@ function VehicleCard({ vehicle, onArchive, onUpdate }: { vehicle: GarageVehicle;
             <div className="flex gap-2"><Button type="submit" disabled={busy}>{busy ? "Saving…" : "Save"}</Button><Button type="button" variant="outline" onClick={() => setEditing(false)}>Cancel</Button></div>
           </form>
         ) : (
-          <div className="flex flex-wrap gap-2 border-t pt-3">
+          <div className="flex flex-wrap gap-2 border-t pt-2">
             <Button size="sm" variant="outline" onClick={() => setEditing(true)}>Edit details</Button>
             {vehicle.status === "owned" && <Button size="sm" variant="ghost" onClick={() => void onArchive(vehicle.id)}><Archive /> Archive</Button>}
           </div>
