@@ -28,6 +28,10 @@ const SERVED = ["car", "car_valuation", "sale", "listing"];
 // the contents do not.
 const EMPTIED = ["car_resolution_queue"];
 
+// Dynamic user-owned tables (app_user, garage_vehicle, garage_valuation_snapshot) are dropped
+// from this immutable serving copy. They remain in the working DB when present, and their
+// production copy lives in Turso outside the market-snapshot diff.
+
 if (!fs.existsSync(SRC)) {
   console.error(`no working database at ${SRC}`);
   process.exit(1);

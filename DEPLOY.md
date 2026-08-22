@@ -162,6 +162,7 @@ throw away a four-hour scrape.
 ```
 TURSO_DATABASE_URL   same value as the secret above
 TURSO_AUTH_TOKEN     same value as the secret above
+SESSION_SECRET       a long random value shared with the frontend project
 ```
 
 [vercel.json](vercel.json) routes every path to `api/index.js`, which hands the request to the
@@ -197,10 +198,17 @@ after it pushes only the diff.
 ```
 API_URL       https://<api-project>.vercel.app
 ACCESS_CODE   your shared login code
+SESSION_SECRET same long random value used by the API project
 ```
 
 ✅ **Check:** the URL loads `/login`, your code gets you in, the catalogue renders, and a car
 detail page, `/trending` and `/deals` all load.
+
+The Garage uses an anonymous browser profile derived from a signed session. Its holdings and
+daily valuation snapshots live in Turso, not in `data-latest` or the pipeline state release, so
+the daily market rebuild and rollback workflows cannot overwrite them. Keep `SESSION_SECRET`
+identical in both Vercel projects; without it, the frontend cannot authenticate garage requests
+to the API. Clearing browser cookies intentionally creates a new empty profile.
 
 ## 7. Prove a real scrape end to end
 

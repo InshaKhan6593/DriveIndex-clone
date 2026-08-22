@@ -512,6 +512,20 @@ jobs:
           [ -f data/serving-prev.sqlite ] && PREV="data/serving-prev.sqlite"
           node db/load-turso.js data/serving.sqlite $PREV
 
+      # Garage holdings are user-owned Turso data, deliberately excluded from the immutable
+      # market snapshot. Refresh their daily marks only after the new valuation diff is loaded.
+      - name: Refresh garage valuations
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TURSO_DATABASE_URL:-}" ]; then
+            echo "::warning::TURSO_DATABASE_URL is not set - skipping garage valuation snapshots."
+            exit 0
+          fi
+          node jobs/garage-snapshot.js
+
       # Fixed tag on purpose: the asset URL never changes. The snapshot is still published even
       # though the API reads Turso - it is the rollback point, and it is what the NEXT run diffs
       # against. --clobber replaces the file in place.

@@ -206,6 +206,53 @@ CREATE TABLE IF NOT EXISTS listing (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_listing_source_lot ON listing (source, source_lot_id);
 
+-- User-owned portfolio data. These tables deliberately sit outside the serving snapshot: the
+-- daily market pipeline replaces global car/sale/valuation rows, but must never replace a user's
+-- garage. In production they live in the same Turso database as the read API and are left out of
+-- db/load-turso.js's diff tables so daily publishes and rollbacks preserve them.
+CREATE TABLE IF NOT EXISTS app_user (
+  id            TEXT PRIMARY KEY,
+  created_at    TEXT NOT NULL,
+  last_seen_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS garage_vehicle (
+  id               TEXT PRIMARY KEY,
+  user_id          TEXT NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+  car_id           TEXT NOT NULL REFERENCES car(id),
+  nickname         TEXT,
+  purchase_price   INTEGER CHECK (purchase_price IS NULL OR purchase_price >= 0),
+  purchase_date    TEXT,
+  current_mileage  INTEGER CHECK (current_mileage IS NULL OR current_mileage >= 0),
+  fees             INTEGER NOT NULL DEFAULT 0 CHECK (fees >= 0),
+  vin              TEXT,
+  color            TEXT,
+  transmission     TEXT,
+  options          TEXT NOT NULL DEFAULT '[]',
+  notes            TEXT,
+  status           TEXT NOT NULL DEFAULT 'owned' CHECK (status IN ('owned', 'sold', 'archived')),
+  sold_at         TEXT,
+  sold_price      INTEGER CHECK (sold_price IS NULL OR sold_price >= 0),
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  UNIQUE (user_id, vin)
+);
+CREATE INDEX IF NOT EXISTS idx_garage_vehicle_user_status ON garage_vehicle (user_id, status);
+CREATE INDEX IF NOT EXISTS idx_garage_vehicle_car ON garage_vehicle (car_id);
+
+CREATE TABLE IF NOT EXISTS garage_valuation_snapshot (
+  id                 TEXT PRIMARY KEY,
+  garage_vehicle_id  TEXT NOT NULL REFERENCES garage_vehicle(id) ON DELETE CASCADE,
+  snapshot_date      TEXT NOT NULL,
+  market_value       INTEGER,
+  mileage_used       INTEGER,
+  base_value         INTEGER,
+  computed_at        TEXT NOT NULL,
+  UNIQUE (garage_vehicle_id, snapshot_date)
+);
+CREATE INDEX IF NOT EXISTS idx_garage_snapshot_vehicle_date
+  ON garage_valuation_snapshot (garage_vehicle_id, snapshot_date DESC);
+
 -- NOT in the original DriveIndex spec — our own addition, implementing the review-queue
 -- principle the spec's methodology text implies but doesn't expose client-side (§4.5):
 -- "Below confidence threshold -> human review queue, never a silent guess." A scraped sale

@@ -8,9 +8,9 @@
 // client-supplied parameter.
 //
 // Usage: node api/server.js  then:
-//   curl 'localhost:3000/api/cars'
-//   curl 'localhost:3000/api/cars/<id>?tier=free'
-//   curl 'localhost:3000/api/cars/<id>?tier=collector'
+//   curl 'localhost:3002/api/cars'
+//   curl 'localhost:3002/api/cars/<id>?tier=free'
+//   curl 'localhost:3002/api/cars/<id>?tier=collector'
 
 const express = require("express");
 const cors = require("cors");
@@ -18,9 +18,11 @@ const { openDb, isHosted } = require("../db/client");
 const { serializeCarSummary, serializeCarDetail, TIERS } = require("./serialize");
 const { mileageAdjust } = require("../engine/mileage");
 const { judgeAsk, dealScore, plausibleMileage } = require("../engine/ranking");
+const { registerGarageRoutes } = require("./garage");
 
 const app = express();
 app.use(cors());
+app.use(express.json({ limit: "32kb" }));
 const db = openDb();
 
 // An index at the root, because every route here is under /api and Express answers a bare "/"
@@ -39,6 +41,9 @@ app.get("/", (req, res) => {
       "/api/cars",
       "/api/cars/:id",
       "/api/cars/:id/reprice",
+      "/api/garage",
+      "/api/garage/:id",
+      "/api/garage/refresh",
       "/api/trending",
       "/api/deals",
       "/api/compare",
@@ -85,6 +90,12 @@ function tierFrom(req) {
   const t = String(req.query.tier || "free").toLowerCase();
   return TIERS.includes(t) ? t : "free";
 }
+
+// PERSONAL GARAGE — user-owned portfolio data layered on top of the global market snapshot.
+// These routes authenticate with the signed session forwarded by the Next.js BFF. The garage
+// tables are intentionally not part of the serving snapshot diff, so a daily market rebuild or
+// rollback cannot overwrite a user's holdings.
+registerGarageRoutes(app, db);
 
 app.get("/api/cars", (req, res) => {
   const tier = tierFrom(req);
@@ -375,7 +386,9 @@ app.get("/api/health", (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+// Keep local development separate from the Next.js/other-app default on port 3000.
+// Hosted runtimes still provide PORT explicitly.
+const PORT = process.env.PORT || 3002;
 if (require.main === module) {
   app.listen(PORT, () => console.log(`API listening on http://localhost:${PORT}`));
 }

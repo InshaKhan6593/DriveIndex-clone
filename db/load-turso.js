@@ -58,6 +58,9 @@ if (!fs.existsSync(NEW)) {
 
 // Tables in dependency order: car before the rows that reference it, so a fresh remote database
 // never holds a row pointing at a car that has not arrived yet.
+// Only immutable market tables are synchronized from the local pipeline snapshot. The
+// user-owned app_user / garage_vehicle / garage_valuation_snapshot tables are created by the
+// shared schema but intentionally never diffed, inserted, or deleted here.
 const TABLES = ["car", "car_valuation", "sale", "listing", "car_resolution_queue"];
 
 const src = new DatabaseSync(NEW, { readOnly: true });

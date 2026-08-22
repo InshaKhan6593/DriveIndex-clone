@@ -698,6 +698,18 @@ node ingest/ingest-listings.js      # samples/listings/*.json -> `listing`
 node jobs/nightly-compute.js
 ```
 
+For an intentional 2025–2026 auction-results backfill, run the permitted sources sequentially:
+
+```bash
+node jobs/recent-backfill.js --sources=mecum,sms,rms,gooding,bonhams,broadarrow --recent-days=730
+node ingest/ingest.js
+node jobs/nightly-compute.js
+```
+
+The backfill is resumable because each source keeps its own harvest and state file. Barrett-Jackson
+is not included in the default list because it requires the authorized `CRAWLER_PROXY_URL` path;
+run it separately with `--sources=bj` only after that access path is configured.
+
 `data/` is gitignored, so a fresh clone has **no FX rate table** until `fx/fetch-ecb-rates.js`
 runs — it downloads the ECB daily reference series (~670 KB) that `ingest` uses to stamp
 `price_usd`. `jobs/cron.js` runs it automatically as the `fx` stage, ordered before `ingest`;
@@ -707,11 +719,14 @@ only a manual first run needs it invoked by hand. Without it every non-USD sale 
 ### API and frontend
 
 ```bash
-node api/server.js                        # read API on :3000
+$env:PORT=3002; node --env-file=web/.env.local api/server.js # read API on :3002
 npm --prefix web run dev                  # Next.js frontend on :3001
 ```
 
-`web/.env.local` needs `ACCESS_CODE` (the shared login code) and `API_URL`.
+`web/.env.local` needs `ACCESS_CODE` (the shared login code) and `API_URL`. The local example
+uses `API_URL=http://localhost:3002` so it does not collide with another app using port 3000.
+The same file supplies `SESSION_SECRET` to both the Next.js login and the API when the API is
+started with the command above.
 
 **Frontend** — Next.js 16 App Router + shadcn/ui, deliberately monochrome. Six routes:
 
@@ -726,6 +741,9 @@ npm --prefix web run dev                  # Next.js frontend on :3001
 - `/trending` — market health, top gainers/decliners, segment indexes, bottomed list.
 - `/deals` — Market Deal Radar: live asks under computed value.
 - `/compare` — up to four cars side by side, with a typeahead picker.
+- `/garage` — personal portfolio: owned cars, mileage-adjusted live values, cost basis, P&L,
+  allocation, daily snapshots, and archiveable ownership history. Garage data is user-owned and
+  stored in Turso separately from the immutable market snapshot.
 
 **No tier gating is applied in this phase** — `fetchCars()` requests `tier=collector` so every
 computed field is visible. The gating architecture in `api/serialize.js` is intact and unchanged;

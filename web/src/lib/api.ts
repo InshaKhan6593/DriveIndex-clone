@@ -1,4 +1,4 @@
-const SERVER_API_URL = process.env.API_URL || "http://localhost:3000";
+const SERVER_API_URL = process.env.API_URL || "http://localhost:3002";
 // API_URL is server-only in Next.js. Client components need the explicitly public value; without
 // it, a browser request must stay same-origin rather than silently targeting localhost.
 const BROWSER_API_URL = process.env.NEXT_PUBLIC_API_URL || "";
@@ -124,6 +124,121 @@ export async function fetchCarDetail(id: string): Promise<CarDetail | null> {
   const res = await fetch(apiUrl(`/api/cars/${id}?tier=collector`), { cache: "no-store" });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`API error ${res.status}`);
+  return res.json();
+}
+
+export type GarageVehicle = {
+  id: string;
+  status: "owned" | "sold" | "archived";
+  nickname: string | null;
+  carId: string;
+  car: {
+    id: string;
+    year: number;
+    make: string;
+    model: string;
+    bodyType: string | null;
+    generation: string | null;
+    imageUrl: string | null;
+  };
+  purchasePrice: number | null;
+  purchaseDate: string | null;
+  currentMileage: number | null;
+  mileageUsed: number | null;
+  averageMileage: number | null;
+  fees: number;
+  totalCost: number | null;
+  vin: string | null;
+  color: string | null;
+  transmission: string | null;
+  options: string[];
+  notes: string | null;
+  soldAt: string | null;
+  soldPrice: number | null;
+  marketValue: number | null;
+  baseValue: number | null;
+  gainLoss: number | null;
+  returnPct: number | null;
+  dayChange: number | null;
+  valuation: {
+    signal: string | null;
+    confidence: number | null;
+    annualReturn: number | null;
+    segment: string | null;
+    buyHoldSell: { label: string | null; copy: string | null } | null;
+    liquidity: { verdict: string | null; copy: string | null; monthsOfSupply: number | null } | null;
+  };
+  lastSnapshotDate: string | null;
+  history: { date: string; marketValue: number | null; mileage: number | null }[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GarageResponse = {
+  asOf: string;
+  summary: {
+    ownedCount: number;
+    pricedCount: number;
+    totalValue: number;
+    totalCost: number | null;
+    unrealizedGain: number | null;
+    unrealizedReturn: number | null;
+    dayChange: number | null;
+    dayChangePct: number | null;
+    unpricedCount: number;
+  };
+  allocation: { label: string; value: number; count: number }[];
+  vehicles: GarageVehicle[];
+};
+
+export async function fetchGarage(): Promise<GarageResponse> {
+  const res = await fetch(apiUrl("/api/garage"), { cache: "no-store" });
+  if (!res.ok) throw new Error(`Garage API error ${res.status}`);
+  return res.json();
+}
+
+export async function createGarageVehicle(input: Record<string, unknown>): Promise<GarageVehicle> {
+  const res = await fetch(apiUrl("/api/garage"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Garage API error ${res.status}`);
+  return data.vehicle;
+}
+
+export async function updateGarageVehicle(id: string, input: Record<string, unknown>): Promise<GarageVehicle> {
+  const res = await fetch(apiUrl(`/api/garage/${encodeURIComponent(id)}`), {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Garage API error ${res.status}`);
+  return data.vehicle;
+}
+
+export async function archiveGarageVehicle(id: string): Promise<void> {
+  const res = await fetch(apiUrl(`/api/garage/${encodeURIComponent(id)}`), { method: "DELETE" });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Garage API error ${res.status}`);
+  }
+}
+
+export async function refreshGarage(): Promise<GarageResponse> {
+  const res = await fetch(apiUrl("/api/garage/refresh"), { method: "POST" });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Garage API error ${res.status}`);
+  return data;
+}
+
+export async function searchGarageCars(q: string): Promise<{
+  results: { id: string; year: number; make: string; model: string; current_value: number | null; sales_count: number }[];
+}> {
+  const res = await fetch(`/api/catalogue?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+  if (!res.ok) return { results: [] };
   return res.json();
 }
 

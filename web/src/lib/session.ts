@@ -5,14 +5,15 @@
 import { createHmac, timingSafeEqual } from "crypto";
 
 const COOKIE_NAME = "di_session";
+const USER_COOKIE_NAME = "di_user";
 const SECRET = process.env.SESSION_SECRET || process.env.ACCESS_CODE || "dev-only-secret";
 
 function sign(value: string) {
   return createHmac("sha256", SECRET).update(value).digest("hex");
 }
 
-export function makeSessionToken() {
-  const payload = "ok";
+export function makeSessionToken(userId: string) {
+  const payload = `v1:${userId}`;
   return `${payload}.${sign(payload)}`;
 }
 
@@ -20,6 +21,7 @@ export function isValidSessionToken(token: string | undefined | null): boolean {
   if (!token) return false;
   const [payload, sig] = token.split(".");
   if (!payload || !sig) return false;
+  if (!payload.startsWith("v1:")) return false;
   const expected = sign(payload);
   const a = Buffer.from(sig);
   const b = Buffer.from(expected);
@@ -27,4 +29,11 @@ export function isValidSessionToken(token: string | undefined | null): boolean {
   return timingSafeEqual(a, b);
 }
 
-export { COOKIE_NAME };
+export function userIdFromSessionToken(token: string | undefined | null): string | null {
+  if (!token || !isValidSessionToken(token)) return null;
+  const [version, userId] = token.slice(0, token.lastIndexOf(".")).split(":");
+  if (version !== "v1" || !/^[0-9a-f-]{36}$/i.test(userId || "")) return null;
+  return userId;
+}
+
+export { COOKIE_NAME, USER_COOKIE_NAME };
