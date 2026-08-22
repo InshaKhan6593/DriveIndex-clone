@@ -1,8 +1,11 @@
 "use strict";
 
+// Express route helpers live outside the root api directory so Vercel does not treat this
+// module as a standalone /api/garage serverless function.
+
 const { newId } = require("../db/client");
 const { valueAtMileage, portfolioGain } = require("../engine/garage");
-const { requireUser } = require("./garage-auth");
+const { requireUser } = require("../api/garage-auth");
 
 const STATUSES = new Set(["owned", "sold", "archived"]);
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;

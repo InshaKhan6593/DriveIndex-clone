@@ -201,6 +201,10 @@ ACCESS_CODE   your shared login code
 SESSION_SECRET same long random value used by the API project
 ```
 
+Do not set `NEXT_PUBLIC_API_URL` for Garage requests. The Garage page deliberately calls the
+frontend's same-origin `/api/garage` routes so Next can forward the signed session to the API;
+calling the API Vercel project directly would lose that session and trigger cross-origin errors.
+
 ✅ **Check:** the URL loads `/login`, your code gets you in, the catalogue renders, and a car
 detail page, `/trending` and `/deals` all load.
 

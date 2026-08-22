@@ -7,6 +7,12 @@ function apiUrl(path: string) {
   return `${typeof window === "undefined" ? SERVER_API_URL : BROWSER_API_URL}${path}`;
 }
 
+// Garage requests must stay same-origin in the browser. The Next.js BFF forwards the signed
+// session cookie to the API; a direct cross-origin request cannot carry that session header.
+function garageApiUrl(path: string) {
+  return typeof window === "undefined" ? `${SERVER_API_URL}${path}` : path;
+}
+
 export type CarSummary = {
   id: string;
   year: number;
@@ -192,16 +198,17 @@ export type GarageResponse = {
 };
 
 export async function fetchGarage(): Promise<GarageResponse> {
-  const res = await fetch(apiUrl("/api/garage"), { cache: "no-store" });
+  const res = await fetch(garageApiUrl("/api/garage"), { cache: "no-store", credentials: "same-origin" });
   if (!res.ok) throw new Error(`Garage API error ${res.status}`);
   return res.json();
 }
 
 export async function createGarageVehicle(input: Record<string, unknown>): Promise<GarageVehicle> {
-  const res = await fetch(apiUrl("/api/garage"), {
+  const res = await fetch(garageApiUrl("/api/garage"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
+    credentials: "same-origin",
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `Garage API error ${res.status}`);
@@ -209,10 +216,11 @@ export async function createGarageVehicle(input: Record<string, unknown>): Promi
 }
 
 export async function updateGarageVehicle(id: string, input: Record<string, unknown>): Promise<GarageVehicle> {
-  const res = await fetch(apiUrl(`/api/garage/${encodeURIComponent(id)}`), {
+  const res = await fetch(garageApiUrl(`/api/garage/${encodeURIComponent(id)}`), {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
+    credentials: "same-origin",
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `Garage API error ${res.status}`);
@@ -220,7 +228,10 @@ export async function updateGarageVehicle(id: string, input: Record<string, unkn
 }
 
 export async function archiveGarageVehicle(id: string): Promise<void> {
-  const res = await fetch(apiUrl(`/api/garage/${encodeURIComponent(id)}`), { method: "DELETE" });
+  const res = await fetch(garageApiUrl(`/api/garage/${encodeURIComponent(id)}`), {
+    method: "DELETE",
+    credentials: "same-origin",
+  });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Garage API error ${res.status}`);
@@ -228,7 +239,10 @@ export async function archiveGarageVehicle(id: string): Promise<void> {
 }
 
 export async function refreshGarage(): Promise<GarageResponse> {
-  const res = await fetch(apiUrl("/api/garage/refresh"), { method: "POST" });
+  const res = await fetch(garageApiUrl("/api/garage/refresh"), {
+    method: "POST",
+    credentials: "same-origin",
+  });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `Garage API error ${res.status}`);
   return data;

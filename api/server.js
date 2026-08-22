@@ -18,7 +18,7 @@ const { openDb, isHosted } = require("../db/client");
 const { serializeCarSummary, serializeCarDetail, TIERS } = require("./serialize");
 const { mileageAdjust } = require("../engine/mileage");
 const { judgeAsk, dealScore, plausibleMileage } = require("../engine/ranking");
-const { registerGarageRoutes } = require("./garage");
+const { registerGarageRoutes } = require("../server/garage-routes");
 
 const app = express();
 app.use(cors());
