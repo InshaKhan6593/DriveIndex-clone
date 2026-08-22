@@ -17,13 +17,10 @@
 // the card walk uses Playwright. Everything that IS server-rendered (sitemaps, the event
 // landing page) uses plain fetch, which is both faster and politer.
 //
-// ── DISCOVERY — their own sitemap, not slug guessing ────────────────────────────────────
-// robots.txt declares sitemap-index.xml, whose auction-sitemap{1..3}.xml list EVERY auction
-// event page back to 2012 (257 distinct slugs). This is what retired the old guessing
-// approach, which failed on 5 of 14 because the pattern is NOT {city}-{year}: 2017-2023
-// Indianapolis sales are "indianapolis-YYYY" while 2020/2024/2025 are "indy-YYYY".
-// Upcoming short codes seen on /results/ (CA26, FL27) never appear in the sitemap with a
-// year suffix and are not past results, so they are simply not enumerated.
+// ── DISCOVERY — sitemap plus the rendered recent archive ─────────────────────────────────
+// The auction sitemap is the broad historical index, but Mecum's completed 2026 events can
+// appear in /past-auctions/ and /results/ before the sitemap catches up. We read those two
+// rendered archive pages as well so current-year sales are not silently skipped.
 //
 // ── SELECTOR POLICY ────────────────────────────────────────────────────────────────────
 // Their class names are CSS-module hashed — `CardLot-module__NbNTua__card`, where `NbNTua`
@@ -54,7 +51,7 @@
 // several attempts are marked dead instead of retried forever.
 //
 // Usage:
-//   node crawler/mecum.event.crawler.js discover     # sitemap -> state (no harvesting)
+//   node crawler/mecum.event.crawler.js discover     # sitemap + recent archive -> state (no harvesting)
 //   node crawler/mecum.event.crawler.js run [maxEvents]
 //   node crawler/mecum.event.crawler.js auto         # discover + run 3 (the cron shape)
 
@@ -113,6 +110,10 @@ const CURRENT_YEAR = Number(process.env.MECUM_CURRENT_YEAR) || new Date().getUTC
 const RECENT_YEAR_RE = new RegExp(`\\b(?:${CURRENT_YEAR}|${CURRENT_YEAR - 1})\\b`);
 
 const SITEMAPS = [1, 2, 3].map((i) => `https://www.mecum.com/sitemaps/auction-sitemap${i}.xml`);
+const RECENT_ARCHIVE_PAGES = [
+  "https://www.mecum.com/past-auctions/",
+  "https://www.mecum.com/results/",
+];
 
 // Non-car SALES, excluded at the event level for the same reason BaT's ten non-car categories
 // are: this is a collector-CAR index, and admitting them floods review one lot at a time.
@@ -157,6 +158,41 @@ async function fetchText(url) {
   return res.text();
 }
 
+// Mecum's recent archive is client-rendered. Keep this discovery walk deliberately small:
+// it only collects event links from two index pages, and the normal event crawler does the
+// expensive lot pagination afterwards.
+async function discoverRecentArchiveSlugs() {
+  const found = new Set();
+  const crawler = new PlaywrightCrawler({
+    maxRequestsPerCrawl: RECENT_ARCHIVE_PAGES.length,
+    maxConcurrency: 1,
+    maxRequestRetries: 1,
+    requestHandlerTimeoutSecs: 120,
+    navigationTimeoutSecs: 90,
+    async requestHandler({ page }) {
+      await page.waitForTimeout(SETTLE_MS);
+      for (let i = 0; i < 3; i++) {
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+        await page.waitForTimeout(1000);
+      }
+      const slugs = await page.evaluate(() => Array.from(document.querySelectorAll('a[href*="/auctions/"]'))
+        .map((a) => (a.getAttribute("href") || "")
+          .match(/\/auctions\/([a-z0-9-]+)\/?(?:[?#].*)?$/i)?.[1]?.toLowerCase())
+        .filter(Boolean));
+      for (const slug of slugs) {
+        if (RECENT_YEAR_RE.test(slug) && !NON_CAR_EVENT.test(slug)) found.add(slug);
+      }
+    },
+  });
+
+  try {
+    await crawler.run(RECENT_ARCHIVE_PAGES);
+  } catch (error) {
+    console.warn(`recent Mecum archive discovery unavailable (${error.message}); continuing with sitemap`);
+  }
+  return found;
+}
+
 async function discover() {
   const slugs = new Set();
   for (const sm of SITEMAPS) {
@@ -164,29 +200,35 @@ async function discover() {
     for (const m of xml.matchAll(/<loc>[^<]*\/auctions\/([a-z0-9-]+)\/?<\/loc>/gi)) slugs.add(m[1].toLowerCase());
     await sleep(DELAY_MS);
   }
+  const recentArchiveSlugs = await discoverRecentArchiveSlugs();
+  const discovered = new Set([...slugs, ...recentArchiveSlugs]);
 
   let added = 0;
   const known = new Set(Object.keys(state.events));
-  for (const s of slugs) {
+  for (const s of discovered) {
     if (NON_CAR_EVENT.test(s)) continue;
     if (known.has(s)) continue;
     state.events[s] = { complete: false, date: null, lots: 0, attempts: 0 };
     added++;
   }
 
-  // Slugs in state that the sitemap does not list were guesses from the pre-sitemap era
+  // Slugs in state that neither discovery index lists were guesses from the pre-sitemap era
   // (measured: indy-2022 and indy-2023 never existed — those years are "indianapolis-YYYY").
   // Mark them dead rather than deleting, so the history of the attempt is kept.
   //
   // ABSENCE FROM THE SITEMAP IS NOT PROOF THE EVENT DOES NOT EXIST. A slug that has already
-  // returned lots demonstrably resolves, whatever the sitemap says — monterey-2025 was retired
+  // returned lots demonstrably resolves, whatever the discovery indexes say — monterey-2025 was retired
   // this way while holding 436 real lots, and because `dead` is filtered out of `todo`
   // permanently those lots would never have refreshed and the event would never have resumed.
   // A guess that never produced anything is still safe to retire.
   let dead = 0, keptAlive = 0;
   for (const s of Object.keys(state.events)) {
     const m = state.events[s];
-    if (slugs.has(s) || m.dead) continue;
+    if (discovered.has(s)) {
+      if (m.dead) delete m.dead;
+      continue;
+    }
+    if (m.dead) continue;
     if ((m.lots || 0) > 0) { keptAlive++; continue; } // it works; the sitemap is just incomplete
     m.dead = true;
     dead++;
@@ -194,14 +236,14 @@ async function discover() {
   // Revive anything previously retired despite having produced lots.
   for (const s of Object.keys(state.events)) {
     const m = state.events[s];
-    if (m.dead && (m.lots || 0) > 0 && !slugs.has(s)) { delete m.dead; keptAlive++; }
+    if (m.dead && (m.lots || 0) > 0 && !discovered.has(s)) { delete m.dead; keptAlive++; }
   }
 
   save();
-  console.log(`discovery: ${slugs.size} sitemap events, ${added} newly queued, ${dead} unproductive guesses marked dead` +
-              (keptAlive ? `, ${keptAlive} kept alive despite being absent from the sitemap (they produced lots)` : "") +
+  console.log(`discovery: ${slugs.size} sitemap events + ${recentArchiveSlugs.size} recent archive events, ${added} newly queued, ${dead} unproductive guesses marked dead` +
+              (keptAlive ? `, ${keptAlive} kept alive despite being absent from the discovery indexes (they produced lots)` : "") +
               ` (${Object.keys(state.events).filter((s) => !state.events[s].dead).length} live)`);
-  return slugs;
+  return discovered;
 }
 
 // ── DATE resolution ────────────────────────────────────────────────────────────────────
