@@ -31,7 +31,7 @@ const { closeListingFromSale, closeListingAsEnded } = require("./listing-lifecyc
 const UA = "Mozilla/5.0 (compatible; price-index-research/1.0)";
 const HEADERS = { "User-Agent": UA };
 const CRAWL_DELAY_MS = 10000; // robots.txt: Crawl-delay: 10 — honored, not worked around
-const RECENT_MODE = process.env.SCRAPE_MODE !== "full";
+const RECENT_MODE = process.env.SCRAPE_MODE !== "full" && process.env.SCRAPE_MODE !== "backfill";
 const RECENT_LOTS = Math.max(1, Number(process.env.BROADARROW_RECENT_LOTS) || 200);
 
 const SITEMAP = "https://www.broadarrowauctions.com/sitemaps/bagauction/sitemap.xml.gz";

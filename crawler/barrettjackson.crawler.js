@@ -24,6 +24,7 @@ const fs = require("fs");
 const path = require("path");
 const { PlaywrightCrawler, ProxyConfiguration } = require("crawlee");
 const { adaptApiRecord } = require("./barrettjackson-adapt");
+const { BACKFILL_MODE, inWindow, yearInWindow } = require("../jobs/backfill-window");
 
 const COMMAND = process.argv[2] || "auto";
 const SAMPLE_MODE = COMMAND === "sample";
@@ -48,9 +49,12 @@ const RECENT_DAYS = Number(process.env.SCRAPE_RECENT_DAYS || process.env.BJ_RECH
 const CURRENT_YEAR = Number(process.env.BJ_CURRENT_YEAR) || new Date().getUTCFullYear();
 const YEAR_SPAN = Number(process.env.BJ_RECENT_YEARS) || 2;
 const TARGET_YEARS = Array.from({ length: Math.max(1, YEAR_SPAN) }, (_, i) => CURRENT_YEAR - i);
-const TARGET_YEAR_RE = RECENT_MODE
+const TARGET_YEAR_RE = BACKFILL_MODE
+  ? /\b20\d{2}\b/
+  : RECENT_MODE
   ? new RegExp(`\\b(?:${TARGET_YEARS.join("|")})\\b`)
   : /\b20\d{2}\b/;
+const REFRESH_COMPLETE = RECENT_MODE && !BACKFILL_MODE;
 const KNOWN_EVENTS = [
   "2026-columbus",
   "2026-palm-beach",
@@ -187,6 +191,9 @@ async function discover() {
 }
 
 function isRecentEvent(slug, event) {
+  if (BACKFILL_MODE) {
+    return inWindow(event?.saleAt) || yearInWindow(slug) || yearInWindow(event?.name);
+  }
   if (TARGET_YEAR_RE.test(String(slug)) || TARGET_YEAR_RE.test(String(event?.name || ""))) return true;
   const date = Date.parse(event?.saleAt || "");
   if (!Number.isFinite(date)) return false;
@@ -231,7 +238,7 @@ async function run(maxEvents = Infinity, maxPages = DEFAULT_MAX_PAGES, maxSales 
   let addedThisRun = 0;
   const todo = Object.entries(state.events)
     .filter(([slug, event]) => (!allowed || allowed.has(slug)) && !["dead", "deferred"].includes(event.status))
-    .filter(([slug, event]) => event.status !== "complete" || (RECENT_MODE && isRecentEvent(slug, event)))
+    .filter(([slug, event]) => event.status !== "complete" || (REFRESH_COMPLETE && isRecentEvent(slug, event)))
     .filter(([, event]) => event.status === "complete" || (event.attempts || 0) < MAX_ATTEMPTS)
     .slice(0, maxEvents);
 

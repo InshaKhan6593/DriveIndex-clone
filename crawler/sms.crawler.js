@@ -17,12 +17,14 @@
 const fs = require("fs");
 const path = require("path");
 const { adaptAuction } = require("./sms-adapt");
+const { BACKFILL_MODE, from, inWindow } = require("../jobs/backfill-window");
 
 const UA = "Mozilla/5.0 (compatible; price-index-research/1.0)";
 const API = "https://www.sothebysmotorsport.com/api/auctions/listings";
 const SORT = "closed_date_desc";
 const PAGE_SIZE = Math.min(100, Math.max(1, Number(process.env.SMS_PAGE_SIZE) || 100));
-const RECENT_MODE = !(process.env.SCRAPE_MODE === "full" || process.argv.includes("--full") || process.argv[2] === "full");
+const FULL_MODE = process.env.SCRAPE_MODE === "full" || process.argv.includes("--full") || process.argv[2] === "full";
+const RECENT_MODE = !FULL_MODE && !BACKFILL_MODE;
 const RECENT_DAYS = Math.max(1, Number(process.env.SCRAPE_RECENT_DAYS) || 45);
 const DELAY_MS = Number(process.env.DELAY_MS) || 1200;
 
@@ -69,6 +71,7 @@ async function run() {
   const sales = new Map(loadJson(OUT, []).map((r) => [`${r.source}|${r.source_lot_id}`, r]));
   const startCount = sales.size;
   const cutoff = Date.now() - RECENT_DAYS * 86400000;
+  const backfillCutoff = from.getTime();
 
   let totalKnown = null;
   let pageCount = Infinity;
@@ -79,8 +82,9 @@ async function run() {
   let failures = 0;
 
   console.log(`resuming: ${startCount} sales on file`);
-  console.log(`SOMO API mode=${RECENT_MODE ? "recent" : "full"} pageSize=${PAGE_SIZE} sort=${SORT}`);
+  console.log(`SOMO API mode=${RECENT_MODE ? "recent" : BACKFILL_MODE ? "backfill" : "full"} pageSize=${PAGE_SIZE} sort=${SORT}`);
   if (RECENT_MODE) console.log(`recent cutoff=${new Date(cutoff).toISOString().slice(0, 10)}`);
+  if (BACKFILL_MODE) console.log(`backfill window=${from.toISOString().slice(0, 10)}..${process.env.SCRAPE_TO_DATE || "configured"}`);
 
   for (let page = 1; page <= pageCount; page++) {
     const r = await fetchPage(page);
@@ -99,6 +103,10 @@ async function run() {
 
     for (const auction of r.auctions) {
       if (RECENT_MODE && soldTime(auction) != null && soldTime(auction) < cutoff) {
+        olderRows++;
+        continue;
+      }
+      if (BACKFILL_MODE && soldTime(auction) != null && !inWindow(auction.soldDate)) {
         olderRows++;
         continue;
       }
@@ -121,6 +129,7 @@ async function run() {
     );
 
     if (RECENT_MODE && pageIsOlderThan(r.auctions, cutoff)) break;
+    if (BACKFILL_MODE && pageIsOlderThan(r.auctions, backfillCutoff)) break;
     if (page >= pageCount || r.auctions.length < PAGE_SIZE) break;
     await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
   }
@@ -132,7 +141,7 @@ async function run() {
   if (totalKnown != null) {
     console.log(
       `SOMO reports ${totalKnown} total sold lots; fetched ${pagesFetched} API page(s)` +
-      `${RECENT_MODE ? ` for the last ${RECENT_DAYS} days` : " for the full archive"}`
+      `${RECENT_MODE ? ` for the last ${RECENT_DAYS} days` : BACKFILL_MODE ? ` for ${from.toISOString().slice(0, 10)}..${process.env.SCRAPE_TO_DATE || "configured"}` : " for the full archive"}`
     );
   }
   console.log(`Wrote ${OUT}`);

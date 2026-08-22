@@ -117,7 +117,9 @@ const CRITERIA = path.join(__dirname, "..", "samples", "bat-filter-criteria.json
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const SORTS = ["td", "ta", "vd", "bd"];
 const STATES = ["sold", "unsold"];
-const RECENT_MODE = process.env.SCRAPE_MODE !== "full";
+// Historical backfill deliberately uses the exhaustive partition walk. It is opt-in; the
+// default recent mode still stops at its normal recent window.
+const RECENT_MODE = process.env.SCRAPE_MODE !== "full" && process.env.SCRAPE_MODE !== "backfill";
 const RECENT_PAGES = Math.max(1, Number(process.env.BAT_RECENT_PAGES || process.env.SCRAPE_RECENT_PAGES) || 5);
 const RECENT_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || 45;
 

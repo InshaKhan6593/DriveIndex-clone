@@ -30,7 +30,7 @@ const { adaptVdpPage } = require("./dupont-adapt");
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 const HEADERS = { "User-Agent": UA, "Accept": "text/html,application/xhtml+xml", "Accept-Language": "en-US,en;q=0.9" };
 const DELAY_MS = Number(process.env.DELAY_MS) || 1500;
-const RECENT_MODE = process.env.SCRAPE_MODE !== "full";
+const RECENT_MODE = process.env.SCRAPE_MODE !== "full" && process.env.SCRAPE_MODE !== "backfill";
 const RECENT_URLS = Math.max(1, Number(process.env.DUPONT_RECENT_URLS) || 200);
 
 const SITEMAP = (n) => `https://www.dupontregistry.com/vdp-sitemap-${n}.xml`;

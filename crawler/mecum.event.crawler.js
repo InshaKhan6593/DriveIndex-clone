@@ -61,6 +61,7 @@ const fs = require("fs");
 const path = require("path");
 const { PlaywrightCrawler } = require("crawlee");
 const { adaptLot } = require("./mecum-adapt");
+const { BACKFILL_MODE, inWindow, yearInWindow } = require("../jobs/backfill-window");
 
 const OUT = path.join(__dirname, "..", "samples", "scraped", "mecum.json");
 const STATE = path.join(__dirname, "..", "samples", "mecum.state.json");
@@ -109,6 +110,7 @@ const RECENT_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || 45;
 const CURRENT_YEAR = Number(process.env.MECUM_CURRENT_YEAR) || new Date().getUTCFullYear();
 const RECENT_YEAR_RE = new RegExp(`\\b(?:${CURRENT_YEAR}|${CURRENT_YEAR - 1})\\b`);
 const CURRENT_YEAR_RE = new RegExp(`\\b${CURRENT_YEAR}\\b`);
+const REFRESH_COMPLETE = RECENT_MODE && !BACKFILL_MODE;
 
 const SITEMAPS = [1, 2, 3].map((i) => `https://www.mecum.com/sitemaps/auction-sitemap${i}.xml`);
 const RECENT_ARCHIVE_PAGES = [
@@ -327,6 +329,7 @@ async function run(maxEvents) {
 
   const now = Date.now();
   const isRecentEvent = (slug, meta) => {
+    if (BACKFILL_MODE) return inWindow(meta.date) || yearInWindow(slug);
     if (RECENT_YEAR_RE.test(String(slug))) return true;
     const date = Date.parse(meta.date || "");
     if (!Number.isFinite(date)) return false;
@@ -336,7 +339,7 @@ async function run(maxEvents) {
   const eligible = Object.entries(state.events)
     .filter(([, m]) => !m.dead)
     .filter(([slug, m]) => !RECENT_MODE || isRecentEvent(slug, m))
-    .filter(([, m]) => !m.complete || (RECENT_MODE && m.complete))
+    .filter(([, m]) => !m.complete || REFRESH_COMPLETE)
     .filter(([, m]) => m.complete || (m.attempts || 0) < MAX_ATTEMPTS)
     // Skip events we already know are in the future — no results to collect.
     .filter(([, m]) => !m.date || new Date(m.date).getTime() < now);
@@ -486,9 +489,9 @@ if (mode === "run" || mode === "auto") acquireLock();
 if (mode === "discover") {
   discover().catch((e) => { console.error(e.message); process.exit(1); });
 } else if (mode === "auto") {
-  discover().then(() => run(3)).catch((e) => { console.error(e.message); process.exit(1); });
+  discover().then(() => run(Number(process.env.MECUM_MAX_EVENTS) || 3)).catch((e) => { console.error(e.message); process.exit(1); });
 } else if (mode === "run") {
-  run(Number(process.argv[3]) || 3).catch((e) => { console.error(e.message); process.exit(1); });
+  run(Number(process.argv[3]) || Number(process.env.MECUM_MAX_EVENTS) || 3).catch((e) => { console.error(e.message); process.exit(1); });
 } else {
   console.error("usage: node crawler/mecum.event.crawler.js [discover|run|maxEvents|auto]");
   process.exit(2);

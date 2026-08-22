@@ -32,11 +32,12 @@ on:
         required: false
         default: "none"
       mode:
-        description: "recent refreshes current windows; full continues historical backfills"
+        description: "recent refreshes current windows; backfill targets an exact date window; full continues all history"
         required: false
         type: choice
         options:
           - recent
+          - backfill
           - full
         default: recent
       recent_days:
@@ -47,6 +48,14 @@ on:
         description: "Per-source: stop starting new work after this many minutes"
         required: false
         default: "240"
+      from_date:
+        description: "Backfill start date (YYYY-MM-DD)"
+        required: false
+        default: "2024-01-01"
+      to_date:
+        description: "Backfill end date (YYYY-MM-DD)"
+        required: false
+        default: "2026-08-22"
 
 # A run takes hours. Two overlapping runs would fight over the same state release and the loser's
 # work would be silently discarded, so a late-starting run waits rather than racing.
@@ -68,6 +77,21 @@ jobs:
       any: ${{ steps.pick.outputs.any }}
     steps:
       - uses: actions/checkout@v4
+      - name: Validate backfill window
+        if: github.event.inputs.mode == 'backfill'
+        env:
+          FROM_DATE: ${{ github.event.inputs.from_date || '2024-01-01' }}
+          TO_DATE: ${{ github.event.inputs.to_date || '2026-08-22' }}
+        run: |
+          node - <<'NODE'
+          const from = new Date(`${process.env.FROM_DATE}T00:00:00Z`);
+          const to = new Date(`${process.env.TO_DATE}T23:59:59Z`);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(process.env.FROM_DATE) || !/^\d{4}-\d{2}-\d{2}$/.test(process.env.TO_DATE) || Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to) {
+            console.error(`Invalid backfill window: ${process.env.FROM_DATE}..${process.env.TO_DATE}`);
+            process.exit(1);
+          }
+          console.log(`Backfill window: ${process.env.FROM_DATE}..${process.env.TO_DATE}`);
+          NODE
       - id: pick
         env:
           SOURCES: ${{ github.event.inputs.sources || 'all' }}
@@ -81,7 +105,7 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false # one auction site being down must not cancel the other sources
-      max-parallel: 6 # polite: do not open ten scrapers at once from one IP range
+      max-parallel: ${{ github.event.inputs.mode == 'backfill' && 4 || 6 }} # backfill is deliberately more conservative
       matrix:
         source: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
@@ -116,6 +140,8 @@ jobs:
           RUN_SOURCES: ${{ github.event.inputs.sources || 'all' }}
           RUN_MODE: ${{ github.event.inputs.mode || 'recent' }}
           RUN_RECENT_DAYS: ${{ github.event.inputs.recent_days || '90' }}
+          RUN_FROM_DATE: ${{ github.event.inputs.from_date || '2024-01-01' }}
+          RUN_TO_DATE: ${{ github.event.inputs.to_date || '2026-08-22' }}
         run: |
           set -euo pipefail
           {
@@ -128,6 +154,8 @@ jobs:
             echo "sources=${RUN_SOURCES}"
             echo "mode=${RUN_MODE}"
             echo "recent_days=${RUN_RECENT_DAYS}"
+            echo "from_date=${RUN_FROM_DATE}"
+            echo "to_date=${RUN_TO_DATE}"
             echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } > /tmp/pipeline-run-manifest.txt
 
@@ -220,6 +248,9 @@ jobs:
           DELAY_MS: "2500"
           SCRAPE_MODE: ${{ github.event.inputs.mode || 'recent' }}
           SCRAPE_RECENT_DAYS: ${{ github.event.inputs.recent_days || '90' }}
+          SCRAPE_FROM_DATE: ${{ github.event.inputs.from_date || '2024-01-01' }}
+          SCRAPE_TO_DATE: ${{ github.event.inputs.to_date || '2026-08-22' }}
+          MECUM_MAX_EVENTS: ${{ github.event.inputs.mode == 'backfill' && '999' || '3' }}
           BJ_PROXY_URL: ${{ secrets.BJ_PROXY_URL }}
           HAGERTY_PROXY_URL: ${{ secrets.HAGERTY_PROXY_URL }}
           BJ_EVENT_SLUGS: ${{ vars.BJ_EVENT_SLUGS }}
@@ -424,6 +455,13 @@ jobs:
           # half-built catalogue is worse than publishing nothing.
           if [ "$code" -ge 2 ]; then exit 1; fi
 
+      - name: Backfill coverage report
+        if: github.event.inputs.mode == 'backfill'
+        env:
+          SCRAPE_FROM_DATE: ${{ github.event.inputs.from_date || '2024-01-01' }}
+          SCRAPE_TO_DATE: ${{ github.event.inputs.to_date || '2026-08-22' }}
+        run: node jobs/backfill-report.js | tee /tmp/backfill-report.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Export the serving snapshot
         run: |
           set -euo pipefail
@@ -591,6 +629,7 @@ jobs:
           path: |
             /tmp/build.log
             /tmp/harvest-summary.log
+            /tmp/backfill-report.md
             /tmp/pipeline-run-manifest.txt
             data/cron-history.jsonl
           if-no-files-found: ignore

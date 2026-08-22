@@ -37,12 +37,13 @@ const SALES_OUT = path.join(__dirname, "..", "samples", "scraped", "hagerty.json
 const LISTINGS_OUT = path.join(__dirname, "..", "samples", "listings", "hagerty-listings.json");
 const STATE_FILE = path.join(__dirname, "..", "samples", "hagerty.state.json");
 
-const MODE = String(process.env.SCRAPE_MODE || "recent").toLowerCase() === "full" ? "full" : "recent";
+const REQUESTED_MODE = String(process.env.SCRAPE_MODE || "recent").toLowerCase();
+const MODE = REQUESTED_MODE === "full" || REQUESTED_MODE === "backfill" ? REQUESTED_MODE : "recent";
 const NOW = new Date();
 const RECENT_DAYS = Number(process.env.SCRAPE_RECENT_DAYS || 90);
-const DEFAULT_FROM = String(process.env.HAGERTY_FROM_DATE || "2024-01-01");
-const DEFAULT_TO = String(process.env.HAGERTY_TO_DATE || "2026-12-31");
-const MAX_REQUESTS = Number(process.env.HAGERTY_MAX_REQUESTS) || (MODE === "full" ? 3000 : 700);
+const DEFAULT_FROM = String(process.env.SCRAPE_FROM_DATE || process.env.HAGERTY_FROM_DATE || "2024-01-01");
+const DEFAULT_TO = String(process.env.SCRAPE_TO_DATE || process.env.HAGERTY_TO_DATE || "2026-12-31");
+const MAX_REQUESTS = Number(process.env.HAGERTY_MAX_REQUESTS) || (MODE !== "recent" ? 3000 : 700);
 const MAX_ACTIVE_DETAILS = Number(process.env.HAGERTY_MAX_ACTIVE_DETAILS) || 350;
 const SETTLE_MS = Number(process.env.HAGERTY_SETTLE_MS) || 2500;
 const DELAY_MS = Number(process.env.DELAY_MS) || 1500;
@@ -78,7 +79,7 @@ function runWindow() {
   const configuredFrom = dateOnly(DEFAULT_FROM) || new Date("2024-01-01T00:00:00.000Z");
   const configuredTo = dateOnly(DEFAULT_TO) || new Date("2026-12-31T23:59:59.999Z");
   const recentFrom = new Date(NOW.getTime() - Math.max(1, RECENT_DAYS) * 86400000);
-  const from = MODE === "full" ? configuredFrom : new Date(Math.max(configuredFrom.getTime(), recentFrom.getTime()));
+  const from = MODE !== "recent" ? configuredFrom : new Date(Math.max(configuredFrom.getTime(), recentFrom.getTime()));
   const to = new Date(Math.min(configuredTo.getTime(), NOW.getTime()));
   return { from, to };
 }
@@ -152,7 +153,7 @@ function recordFrom(out, stats) {
 function detailAlreadyDone(url) {
   // Full backfills resume historical detail pages. Recent runs deliberately refresh active URLs
   // even when a previous run saw them, because current bids and ending times change daily.
-  return MODE === "full" && state.done[url] && !state.active[url];
+  return MODE !== "recent" && state.done[url] && !state.active[url];
 }
 
 async function discover() {

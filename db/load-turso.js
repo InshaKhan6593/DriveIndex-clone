@@ -222,6 +222,41 @@ function primaryKeyOf(table) {
   return null; // composite or absent — deletion reconciliation is skipped, and says so
 }
 
+// computed_at is bookkeeping, not valuation data. The compute job may refresh it for every
+// row even when none of the values the API serves changed. Compare the business columns first,
+// then fetch the complete current rows for the changed keys so new valuation fields are still
+// written without causing timestamp-only Turso writes.
+function rowsChangedIgnoring(table, cols, ignored) {
+  const compareCols = cols.filter((column) => !ignored.includes(column));
+  if (compareCols.length === cols.length) return null;
+
+  const key = primaryKeyOf(table);
+  if (!key || !compareCols.includes(key)) return null;
+
+  const compareList = compareCols.map((column) => `"${column}"`).join(", ");
+  const changedKeys = src.prepare(
+    `SELECT "${key}" FROM (
+       SELECT ${compareList} FROM main."${table}"
+       EXCEPT
+       SELECT ${compareList} FROM prev."${table}"
+     )`
+  ).all().map((row) => row[key]);
+
+  if (!changedKeys.length) return [];
+
+  const rows = [];
+  const fullList = cols.map((column) => `"${column}"`).join(", ");
+  for (let i = 0; i < changedKeys.length; i += 500) {
+    const batch = changedKeys.slice(i, i + 500);
+    rows.push(...src.prepare(
+      `SELECT ${fullList}
+       FROM main."${table}"
+       WHERE "${key}" IN (${batch.map(() => "?").join(", ")})`
+    ).all(...batch));
+  }
+  return rows;
+}
+
 let totalWrites = 0;
 let totalDeletes = 0;
 // Deletions are collected here and applied after every insert, in reverse table order.
@@ -237,15 +272,20 @@ for (const table of TABLES) {
   const cols = writableColumns(table);
   const colList = cols.map((c) => `"${c}"`).join(", ");
 
-  // Whole-row EXCEPT: catches inserts AND in-place edits to any column, without having to know
-  // which columns a given release happens to change.
-  const changedSql = usePreviousSnapshot
-    ? `SELECT ${colList} FROM main."${table}" EXCEPT SELECT ${colList} FROM prev."${table}"`
-    : `SELECT ${colList} FROM main."${table}"`;
-
   let changed;
   try {
-    changed = src.prepare(changedSql).all();
+    // Whole-row EXCEPT catches inserts AND in-place edits. Valuations get a business-field diff
+    // so refreshing computed_at alone does not consume a Turso write; changed rows are still
+    // loaded with every writable column below.
+    changed = usePreviousSnapshot && table === "car_valuation"
+      ? rowsChangedIgnoring(table, cols, ["computed_at"])
+      : null;
+    if (changed === null) {
+      const changedSql = usePreviousSnapshot
+        ? `SELECT ${colList} FROM main."${table}" EXCEPT SELECT ${colList} FROM prev."${table}"`
+        : `SELECT ${colList} FROM main."${table}"`;
+      changed = src.prepare(changedSql).all();
+    }
   } catch (err) {
     // A table absent from the PREVIOUS snapshot (schema added since) cannot be diffed — push all.
     console.log(`${table.padEnd(22)} diff failed (${err.message.slice(0, 40)}) — pushing all rows`);

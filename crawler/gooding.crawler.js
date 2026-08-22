@@ -36,6 +36,7 @@
 const fs = require("fs");
 const path = require("path");
 const { adaptLot } = require("./gooding-adapt");
+const { BACKFILL_MODE, inWindow } = require("../jobs/backfill-window");
 
 const SITEMAP = "https://www.goodingco.com/sitemap.xml";
 const PAGE_DATA = (slug) => `https://www.goodingco.com/page-data/auction/realized/${slug}/page-data.json`;
@@ -122,12 +123,14 @@ async function run() {
     if (processed >= maxAuctions) break;
     const meta = state.auctions[slug];
 
-    if (!full && meta.date) {
+    if (!BACKFILL_MODE && !full && meta.date) {
       const age = (now - new Date(meta.date).getTime()) / 86400000;
       if (age > RECHECK_DAYS) { skipped++; continue; }
     }
 
-    if (!full && meta.complete) {
+    if (BACKFILL_MODE && meta.date && !inWindow(meta.date)) { skipped++; continue; }
+
+    if (!BACKFILL_MODE && !full && meta.complete) {
       const age = meta.date ? (now - new Date(meta.date).getTime()) / 86400000 : Infinity;
       if (age > RECHECK_DAYS) { skipped++; continue; }
     }
@@ -140,6 +143,16 @@ async function run() {
     }
 
     const soldAt = resolveAuctionDate(r.auction.subEvents);
+    if (BACKFILL_MODE && !inWindow(soldAt)) {
+      meta.date = soldAt;
+      meta.complete = true;
+      meta.harvestedAt = new Date().toISOString();
+      skipped++;
+      state.updated = new Date().toISOString();
+      fs.writeFileSync(STATE, JSON.stringify(state, null, 1));
+      await sleep(DELAY_MS);
+      continue;
+    }
     const lots = r.auction.lot || [];
     const auctionMeta = { auctionSlug: slug, auctionName: r.title, currency: r.auction.currency };
 

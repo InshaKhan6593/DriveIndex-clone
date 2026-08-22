@@ -87,7 +87,7 @@ const IDS_TTL_MS = 12 * 60 * 60 * 1000;
 // How long after a sale date to keep re-checking an auction whose lots had not concluded.
 // Same window rms and gooding use — results post late, especially on multi-day sales.
 const RECHECK_DAYS = 45;
-const RECENT_MODE = process.env.SCRAPE_MODE !== "full";
+const RECENT_MODE = process.env.SCRAPE_MODE !== "full" && process.env.SCRAPE_MODE !== "backfill";
 const RECENT_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || RECHECK_DAYS;
 const RECENT_AUCTIONS = Math.max(1, Number(process.env.BONHAMS_RECENT_AUCTIONS) || 50);
 

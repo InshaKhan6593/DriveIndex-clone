@@ -36,6 +36,7 @@ const fs = require("fs");
 const path = require("path");
 const { adaptLot } = require("./rms-adapt");
 const { closeListingFromSale, closeListingAsEnded } = require("./listing-lifecycle");
+const { BACKFILL_MODE, inWindow } = require("../jobs/backfill-window");
 
 const API = "https://rmsothebys.com/api/search/SearchLots";
 const UA = "Mozilla/5.0 (compatible; price-index-research/1.0)";
@@ -45,7 +46,7 @@ const PAGE_SIZE = 200;
 const MAX_PAGE = 49;            // measured: offset 10,000 is the last page that answers
 const DELAY_MS = Number(process.env.DELAY_MS) || 1500;
 const RECHECK_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || 45; // late results are common
-const DISCOVERY_PAGES = process.env.SCRAPE_MODE === "full"
+const DISCOVERY_PAGES = process.env.SCRAPE_MODE === "full" || BACKFILL_MODE
   ? MAX_PAGE
   : Math.max(1, Number(process.env.RMS_RECENT_DISCOVERY_PAGES) || 5);
 
@@ -173,19 +174,23 @@ async function run() {
   for (const [code, meta] of Object.entries(state.auctions)) {
     if (processed >= maxAuctions) break;
 
-    if (!full && meta.date) {
+    if (!BACKFILL_MODE && !full && meta.date) {
       const age = (now - new Date(meta.date).getTime()) / 86400000;
       if (age > RECHECK_DAYS) { skipped++; continue; }
     }
 
+    if (BACKFILL_MODE && meta.date && !inWindow(meta.date)) { skipped++; continue; }
+
     // Incremental: a finished, settled auction is immutable — do not re-fetch it every night.
     // Recent ones stay in the recheck window because late results are common.
-    if (!full && meta.complete) {
+    if (!BACKFILL_MODE && !full && meta.complete) {
       const age = meta.date ? (now - new Date(meta.date).getTime()) / 86400000 : Infinity;
       if (age > RECHECK_DAYS) { skipped++; continue; }
     }
 
     if (!meta.date) meta.date = await resolveAuctionDate(code), await sleep(DELAY_MS);
+    if (BACKFILL_MODE && meta.date && !inWindow(meta.date)) { skipped++; continue; }
+    if (BACKFILL_MODE && meta.complete) { skipped++; continue; }
 
     let claimed = null, added = 0, closedListings = 0, undated = 0, asks = 0, notSold = 0;
     for (let page = 0; page <= MAX_PAGE; page++) {

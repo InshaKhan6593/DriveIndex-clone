@@ -32,7 +32,7 @@ const { PlaywrightCrawler } = require("crawlee");
 const { adaptAuction } = require("./cab-adapt");
 
 const OUT = path.join(__dirname, "..", "samples", "scraped", "cars-and-bids.json");
-const FULL = process.argv.includes("--full") || process.env.SCRAPE_MODE === "full";
+const FULL = process.argv.includes("--full") || process.env.SCRAPE_MODE === "full" || process.env.SCRAPE_MODE === "backfill";
 const RECENT_DAYS = Number(process.env.SCRAPE_RECENT_DAYS) || 45;
 const MAX_SCROLLS = Number(process.argv.find((a) => /^\d+$/.test(a))) || (FULL ? 1200 : 60);
 const STOP_AFTER_KNOWN = 8; // consecutive all-known batches before an incremental run stops
