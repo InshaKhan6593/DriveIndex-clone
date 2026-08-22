@@ -5,7 +5,9 @@
 // of the pipeline's immutable serving snapshot.
 
 const { openDb } = require("../db/client");
-const { snapshotUser } = require("../api/garage");
+// Garage route helpers live outside api/ so Vercel does not deploy them as a standalone
+// serverless function. Reuse the same shared implementation for the scheduled snapshot job.
+const { snapshotUser } = require("../server/garage-routes");
 
 const db = openDb();
 const users = db.prepare("SELECT id FROM app_user ORDER BY id").all();
